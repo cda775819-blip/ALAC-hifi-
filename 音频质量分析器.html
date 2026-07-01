@@ -1,0 +1,3490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音频质量分析器 Pro</title>
+<style>
+:root {
+  --bg0: #0d1117;
+  --bg1: #161b22;
+  --bg2: #21262d;
+  --bg3: #30363d;
+  --fg0: #e6edf3;
+  --fg1: #c9d1d9;
+  --fg2: #8b949e;
+  --fg3: #6e7681;
+  --ac:  #58a6ff;
+  --ac2: #79c0ff;
+  --gr:  #3fb950;
+  --ye:  #d29922;
+  --re:  #f85149;
+  --pu:  #bc8cff;
+  --cy:  #39d2c0;
+  --border: #30363d;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg0); color: var(--fg1); line-height: 1.5;
+  overflow-x: hidden; min-height: 100vh;
+}
+/* ── 布局 ── */
+.app{display:flex;min-height:100vh}
+.sidebar{
+  width: 280px; min-width: 280px; background: var(--bg1);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh; z-index: 10;
+}
+.sidebar-header{
+  padding: 20px 20px 16px; border-bottom: 1px solid var(--border);
+}
+.sidebar-header h1{font-size:1.1rem;font-weight:700;color:var(--fg0);letter-spacing:-0.3px}
+.sidebar-header .sub{font-size:.7rem;color:var(--fg3);margin-top:2px;text-transform:uppercase;letter-spacing:1px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:10px 20px;
+  font-size:.82rem;color:var(--fg2);cursor:pointer;transition:.15s;
+  border-left: 3px solid transparent; user-select: none;
+}
+.nav-item:hover{color:var(--fg0);background:rgba(255,255,255,.03)}
+.nav-item.active{color:var(--ac);background:rgba(88,166,255,.08);border-left-color:var(--ac);font-weight:600}
+.nav-item .ico{font-size:1rem;width:20px;text-align:center;opacity:.7}
+.sidebar-footer{padding:16px 20px;border-top:1px solid var(--border);font-size:.7rem;color:var(--fg3)}
+.main{
+  flex:1; display: flex; flex-direction: column; min-width: 0;
+}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 24px;background:var(--bg1);border-bottom:1px solid var(--border);
+  position: sticky; top: 0; z-index: 5;
+}
+.topbar .file-name{font-size:.85rem;color:var(--fg2);font-weight:500;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{
+  padding:7px 16px;border:1px solid var(--border);border-radius:6px;
+  background:var(--bg2);color:var(--fg1);font-size:.8rem;font-weight:500;
+  cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:6px;
+}
+.btn:hover{background:var(--bg3);border-color:var(--fg3)}
+.btn.primary{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--ac2);border-color:var(--ac2)}
+.btn-group{display:flex;gap:8px}
+.content{padding:20px 24px;flex:1;overflow-y:auto}
+/* ── 拖放区 ── */
+.drop-zone{
+  border:2px dashed var(--border);border-radius:12px;
+  padding:60px 20px;text-align:center;cursor:pointer;transition:.2s;
+  background:var(--bg1);margin:80px auto;max-width:560px;
+}
+.drop-zone:hover,.drop-zone.active{border-color:var(--ac);background:var(--bg2)}
+.drop-zone h2{font-size:1.2rem;color:var(--fg0);margin-bottom:8px}
+.drop-zone p{font-size:.82rem;color:var(--fg3)}
+.drop-zone .icon{font-size:3rem;margin-bottom:16px;opacity:.5}
+.drop-zone .formats{margin-top:16px;font-size:.7rem;color:var(--fg3);font-family:'SF Mono',Consolas,monospace}
+/* 紧凑模式 */
+.drop-zone.compact{
+  padding:16px 24px;margin:12px 0 8px;max-width:100%;
+  display:flex;align-items:center;justify-content:center;gap:14px;
+}
+.drop-zone.compact .icon{font-size:1.5rem;margin:0}
+.drop-zone.compact h2{font-size:.85rem;margin:0}
+.drop-zone.compact p,.drop-zone.compact .formats{display:none}
+/* ── 卡片 ── */
+.card{
+  background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius);
+  margin-bottom:16px;overflow:hidden;
+}
+.card-header{
+  padding:14px 20px;font-size:.85rem;font-weight:600;color:var(--fg0);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;
+  background:var(--bg2);
+}
+.card-body{padding:18px 20px}
+/* ── 帮助解读 ── */
+.help-toggle{
+  background:none;border:1px solid var(--border);color:var(--fg3);cursor:pointer;
+  font-size:.7rem;padding:4px 12px;border-radius:14px;transition:all .2s;
+  display:inline-flex;align-items:center;gap:4px;
+}
+.help-toggle:hover{color:var(--ac);border-color:var(--ac)}
+.help-toggle.open{color:var(--ac);border-color:var(--ac);background:rgba(88,166,255,.08)}
+.help-body{
+  font-size:.74rem;color:var(--fg2);line-height:1.7;
+  margin-top:12px;padding:14px 16px;background:var(--bg2);border-radius:8px;
+  max-height:0;overflow:hidden;opacity:0;transition:max-height .4s,opacity .3s,margin .3s,padding .3s;
+}
+.help-body.open{max-height:2000px;opacity:1}
+.help-body dt{font-weight:600;color:var(--fg0);margin-top:12px;font-size:.76rem}
+.help-body dt:first-child{margin-top:0}
+.help-body dd{margin:2px 0 0 0;padding-bottom:10px;border-bottom:1px solid rgba(48,54,61,.4)}
+.help-body dd:last-child{border-bottom:none;padding-bottom:0}
+.help-body .good{color:var(--gr)}
+.help-body .bad{color:var(--re)}
+.help-body .warn{color:var(--ye)}
+/* ── 智能诊断卡 ── */
+.smart-card{
+  font-size:.78rem;color:var(--fg1);line-height:1.7;
+  margin:12px 0;padding:14px 16px;background:#0d2233;border-radius:8px;
+  border-left:3px solid var(--ac);
+}
+.smart-card .good{color:var(--gr)}
+.smart-card .bad{color:var(--re)}
+.smart-card .warn{color:var(--ye)}
+.smart-card .hint{color:var(--ac)}
+.card-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(48,54,61,.5);font-size:.82rem}
+.card-row:last-child{border-bottom:none}
+.card-row .lbl{color:var(--fg2)}
+.card-row .val{color:var(--fg0);font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.row-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 32px}
+/* ── Canvas 容器 ── */
+.canvas-wrap{position:relative;margin:4px 0}
+.canvas-wrap canvas{width:100%;border-radius:4px;display:block}
+.canvas-wrap .label{display:flex;justify-content:space-between;font-size:.68rem;color:var(--fg3);margin-bottom:3px}
+/* ── 标签、评级 ── */
+.badge{
+  display:inline-block;font-size:.7rem;font-weight:700;padding:3px 10px;
+  border-radius:12px;letter-spacing:.3px;
+}
+.badge-pass{background:rgba(63,185,80,.15);color:var(--gr)}
+.badge-hint{background:rgba(88,166,255,.15);color:var(--ac)}
+.badge-warn{background:rgba(210,153,34,.15);color:var(--ye)}
+.badge-fail{background:rgba(248,81,73,.15);color:var(--re)}
+/* ── 进度条 ── */
+.progress-wrap{background:var(--bg2);border-radius:4px;height:6px;overflow:hidden;margin:4px 0 8px}
+.progress-bar{height:100%;background:var(--ac);border-radius:4px;transition:width .3s;width:0}
+/* ── 加载 ── */
+.loading-overlay{
+  position:fixed;inset:0;background:rgba(13,17,23,.7);z-index:100;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;
+}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--ac);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{color:var(--fg2);font-size:.85rem}
+/* ── 状态栏 ── */
+.statusbar{
+  padding:8px 24px;font-size:.72rem;color:var(--fg3);background:var(--bg1);
+  border-top:1px solid var(--border);display:flex;justify-content:space-between;
+}
+/* ── 工具提示 ── */
+.tooltip{position:relative;cursor:help;border-bottom:1px dotted var(--fg3)}
+.tooltip:hover::after{
+  content:attr(data-tip);position:absolute;bottom:120%;left:50%;transform:translateX(-50%);
+  background:var(--bg0);border:1px solid var(--border);padding:6px 10px;
+  border-radius:6px;font-size:.72rem;white-space:nowrap;z-index:20;color:var(--fg1);
+}
+/* ── 响应式 ── */
+@media(max-width:768px){
+  .app{flex-direction:column}
+  .sidebar{width:100%;min-width:auto;height:auto;position:relative;flex-direction:row;overflow-x:auto}
+  .sidebar-nav{display:flex;flex-direction:row;padding:0}
+  .nav-item{border-left:none;border-bottom:3px solid transparent;padding:12px 16px;white-space:nowrap}
+  .nav-item.active{border-left:none;border-bottom-color:var(--ac)}
+  .sidebar-header,.sidebar-footer{display:none}
+  .topbar{padding:10px 16px}
+  .content{padding:12px 16px}
+  .drop-zone{margin:40px 16px;padding:40px 16px}
+}
+/* 滚动条 */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--fg3)}
+/* ── 调试面板 ── */
+.debug-console{
+  background:var(--bg0); border-top:2px solid var(--border); position:relative; z-index:15;
+  max-height:0; overflow:hidden; transition:max-height .3s;
+}
+.debug-console.open{max-height:420px;overflow-y:auto}
+.debug-header{
+  padding:8px 24px;background:var(--bg1);display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+  font-size:.78rem;color:var(--fg2);border-bottom:1px solid var(--border);user-select:none;
+}
+.debug-header:hover{color:var(--fg0)}
+.debug-header .count{font-size:.68rem;padding:2px 8px;border-radius:10px;background:var(--bg3)}
+.debug-header .count.err{background:rgba(248,81,73,.2);color:var(--re)}
+.debug-header .count.ok{background:rgba(63,185,80,.2);color:var(--gr)}
+.debug-body{padding:8px 24px;font-family:'SF Mono','Cascadia Code',Consolas,monospace;font-size:.7rem;line-height:1.7}
+.debug-entry{display:flex;gap:10px;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(48,54,61,.3)}
+.debug-entry .ts{color:var(--fg3);min-width:70px;flex-shrink:0}
+.debug-entry .tag{min-width:44px;flex-shrink:0;font-weight:700;font-size:.65rem;text-align:center;padding:1px 5px;border-radius:3px}
+.debug-entry .tag.info{background:rgba(88,166,255,.15);color:var(--ac)}
+.debug-entry .tag.ok{background:rgba(63,185,80,.15);color:var(--gr)}
+.debug-entry .tag.warn{background:rgba(210,153,34,.15);color:var(--ye)}
+.debug-entry .tag.err{background:rgba(248,81,73,.15);color:var(--re)}
+.debug-entry .msg{color:var(--fg1);word-break:break-all}
+.debug-empty{color:var(--fg3);text-align:center;padding:20px}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>Audio Analyzer Pro</h1>
+      <div class="sub">Professional Audio QC Tool</div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-item active" data-section="overview">
+        <span class="ico">◈</span> 总览
+      </div>
+      <div class="nav-item" data-section="spectrum">
+        <span class="ico">◫</span> 频谱分析
+      </div>
+      <div class="nav-item" data-section="spectrogram">
+        <span class="ico">▦</span> 频谱图
+      </div>
+      <div class="nav-item" data-section="waveform">
+        <span class="ico">▤</span> 波形
+      </div>
+      <div class="nav-item" data-section="dynamics">
+        <span class="ico">◎</span> 动态 & 响度
+      </div>
+      <div class="nav-item" data-section="stereo">
+        <span class="ico">◐</span> 立体声 & 相位
+      </div>
+      <div class="nav-item" data-section="quality">
+        <span class="ico">★</span> 质量评估
+      </div>
+      <div class="nav-item" data-section="info">
+        <span class="ico">i</span> 文件信息
+      </div>
+    </nav>
+    <div class="sidebar-footer">v7.0 &middot; 100% 本地处理</div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main" id="mainArea">
+    <div class="topbar" id="topbar">
+      <span class="file-name" id="topFileName">— 未加载文件 —</span>
+      <div class="btn-group">
+        <button class="btn" onclick="document.getElementById('fileInput').click()" id="btnBrowse">打开文件</button>
+        <button class="btn" id="btnExport" style="display:none" onclick="exportReport()">导出报告</button>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept="audio/*,.flac,.wav,.aiff,.aif,.alac,.m4a,.mp3,.aac,.ogg,.opus,.wma,.ape,.wv,.tta,.dsf,.dff,.caf,.ac3,.eac3,.mka,.webm" multiple style="display:none">
+
+    <div class="content" id="contentArea">
+      <!-- 拖放区 -->
+      <div class="drop-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+        <div class="icon">⬇</div>
+        <h2>拖放音频文件到此处</h2>
+        <p>或点击选择文件 / 拖入文件夹批量分析</p>
+        <p class="formats">FLAC &nbsp; WAV &nbsp; AIFF &nbsp; ALAC &nbsp; MP3 &nbsp; AAC &nbsp; OGG &nbsp; OPUS &nbsp; M4A &nbsp; WMA &nbsp; APE &nbsp; WV &nbsp; TTA &nbsp; DSF &nbsp; DFF &nbsp; CAF &nbsp; AC3 &nbsp; WebM</p>
+      </div>
+      <!-- 结果区 -->
+      <div id="results" style="display:none"></div>
+    </div>
+
+    <div class="statusbar" id="statusbar">
+      <span id="statusLeft">就绪</span>
+      <span id="statusRight">所有分析在浏览器本地完成 &middot; 文件不会上传</span>
+    </div>
+  </main>
+</div>
+
+<!-- 调试面板 -->
+<div class="debug-console" id="debugConsole">
+  <div class="debug-header" id="debugHeader" onclick="toggleDebug()">
+    <span>🛠 调试日志</span>
+    <div style="display:flex;gap:6px">
+      <span class="count err" id="debugErrCount" style="display:none">0</span>
+      <span class="count ok" id="debugOkCount" style="display:none">0</span>
+      <span style="font-size:.68rem">▼</span>
+    </div>
+  </div>
+  <div class="debug-body" id="debugBody">
+    <div class="debug-empty">等待文件加载...</div>
+  </div>
+</div>
+
+<!-- 加载遮罩 -->
+<div class="loading-overlay" id="loadingOverlay" style="display:none">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">正在解码音频...</div>
+  <div class="progress-wrap" style="width:240px"><div class="progress-bar" id="progressBar"></div></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  Audio Analyzer Pro v7.0
+// ═══════════════════════════════════════════════════════════════
+
+const $ = (s, p = document) => p.querySelector(s);
+const $$ = (s, p = document) => [...p.querySelectorAll(s)];
+
+// ── 全局状态 ──
+const STATE = {
+  buffer: null, file: null, rawBytes: null,
+  channels: 0, sampleRate: 0, duration: 0,
+  formatInfo: {},
+  analysis: {},
+  batchResults: [],   // 批量分析结果
+  batchIndex: -1,     // 当前显示的文件索引
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  调试日志系统
+// ═══════════════════════════════════════════════════════════════
+
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+const D = {
+  entries: [],
+  _errCount: 0, _okCount: 0,
+  _startTime: 0,
+
+  reset() {
+    this.entries = [];
+    this._errCount = 0; this._okCount = 0;
+    this._startTime = Date.now();
+    $('#debugBody').innerHTML = '<div class="debug-empty">等待文件加载...</div>';
+    $('#debugErrCount').style.display = 'none';
+    $('#debugOkCount').style.display = 'none';
+    $('#debugConsole').classList.remove('open');
+  },
+
+  log(level, tag, msg) {
+    const elapsed = ((Date.now() - this._startTime) / 1000).toFixed(2);
+    this.entries.push({ elapsed, level, tag, msg });
+    if (level === 'err') this._errCount++;
+    if (level === 'ok') this._okCount++;
+    this._render();
+  },
+
+  info(tag, msg) { this.log('info', tag, msg); },
+  ok(tag, msg) { this.log('ok', tag, msg); },
+  warn(tag, msg) { this.log('warn', tag, msg); },
+  err(tag, msg) { this.log('err', tag, msg); },
+
+  _render() {
+    const body = $('#debugBody');
+    if (this.entries.length === 1 && this.entries[0].tag === 'INIT') {
+      body.innerHTML = '';
+    }
+    if (this._suppressDOM) return;
+    // 只刷新最后几条 (性能优化)
+    const recent = this.entries.slice(-1);
+    for (const e of recent) {
+      const div = document.createElement('div');
+      div.className = 'debug-entry';
+      div.innerHTML = `<span class="ts">+${e.elapsed}s</span><span class="tag ${e.level}">${e.tag}</span><span class="msg">${e.msg}</span>`;
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+    }
+    // 自动清理旧条目: DOM 保留 500 条，内存保留 1000 条
+    const maxDOM = 500;
+    while (body.children.length > maxDOM) body.removeChild(body.firstChild);
+    const maxData = 1000;
+    if (this.entries.length > maxData) this.entries = this.entries.slice(-maxData);
+    // 更新计数
+    $('#debugErrCount').textContent = this._errCount;
+    $('#debugErrCount').style.display = this._errCount > 0 ? '' : 'none';
+    $('#debugOkCount').textContent = this._okCount;
+    $('#debugOkCount').style.display = this._okCount > 0 ? '' : 'none';
+    // 有错误时自动展开
+    if (this._errCount > 0) {
+      $('#debugConsole').classList.add('open');
+    }
+  }
+};
+
+function toggleDebug() {
+  $('#debugConsole').classList.toggle('open');
+}
+
+// 启动日志
+D.reset();
+D._suppressDOM = true;
+D.info('INIT', '调试日志已就绪');
+D.info('ENV', `UserAgent: ${navigator.userAgent.substring(0, 80)}...`);
+D.info('ENV', `AudioContext: sampleRate=${audioCtx.sampleRate}Hz, state=${audioCtx.state}, channels=${audioCtx.destination.maxChannelCount}`);
+
+// 检测浏览器格式支持
+const testFormats = {
+  'audio/flac': 'FLAC', 'audio/wav': 'WAV', 'audio/mpeg': 'MP3',
+  'audio/mp4': 'M4A/AAC', 'audio/mp4;codecs=alac': 'ALAC',
+  'audio/ogg': 'OGG', 'audio/ogg;codecs=opus': 'Opus',
+  'audio/webm': 'WebM', 'audio/aiff': 'AIFF',
+};
+const supported = [], unsupported = [];
+for (const [mime, label] of Object.entries(testFormats)) {
+  const r = new Audio().canPlayType(mime);
+  if (r === 'probably' || r === 'maybe') supported.push(label);
+  else unsupported.push(label);
+}
+D.info('CAPS', `浏览器 原生支持: ${supported.join(', ') || '(无)'}`);
+if (unsupported.length) D.info('CAPS', `分析器内置解码: ${unsupported.join(', ')}（自动切换，无需担心）`);
+
+// ═══════════════════════════════════════════════════════════════
+//  拖放与文件选择
+// ═══════════════════════════════════════════════════════════════
+
+const dropZone = $('#dropZone');
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('active'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+dropZone.addEventListener('drop', async e => {
+  e.preventDefault(); dropZone.classList.remove('active');
+  const files = [...e.dataTransfer.files].filter(isAudioFile);
+  if (files.length) await processFiles(files);
+});
+
+$('#fileInput').addEventListener('change', async function() {
+  if (this.files.length) await processFiles([...this.files]);
+});
+
+function isAudioFile(f) {
+  const exts = '.flac.wav.aiff.aif.alac.m4a.mp3.aac.ogg.opus.wma.ape.wv.tta.dsf.dff.caf.ac3.eac3.mka.webm.w64.rf64';
+  const name = f.name.toLowerCase();
+  return f.type.startsWith('audio/') || exts.split('.').some(e => name.endsWith('.' + e));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  文件头格式解析 — 覆盖所有格式
+// ═══════════════════════════════════════════════════════════════
+
+function parseFormatFromBytes(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 256));
+  const readStr = (off, len) => String.fromCharCode(...new Uint8Array(bytes.buffer, bytes.byteOffset + off, len));
+  const readU16LE = off => dv.getUint16(off, true);
+  const readU16BE = off => dv.getUint16(off, false);
+  const readU32LE = off => dv.getUint32(off, true);
+  const readU32BE = off => dv.getUint32(off, false);
+
+  const sig4 = readStr(0, 4);
+  const sig3 = readStr(0, 3);
+
+  // RIFF: WAV, AVI, etc.
+  if (sig4 === 'RIFF' && bytes.byteLength > 12) {
+    const riffType = readStr(8, 4);
+    if (riffType === 'WAVE') {
+      // 解析 WAV 详细信息
+      let fmt = { container: 'WAV', codec: 'PCM', format: 'WAV', lossless: true };
+      let off = 12;
+      while (off < Math.min(bytes.byteLength, 1024)) {
+        const chunkId = readStr(off, 4);
+        const chunkSize = readU32LE(off + 4);
+        if (chunkId === 'fmt ') {
+          const audioFormat = readU16LE(off + 8);
+          const ch = readU16LE(off + 10);
+          const sr = readU32LE(off + 12);
+          const bitrate = readU32LE(off + 16); // byte rate
+          const blockAlign = readU16LE(off + 20);
+          const bitsPerSample = readU16LE(off + 22);
+          const codecMap = {1:'PCM',3:'IEEE Float',6:'A-law',7:'μ-law',0xFFFE:'Extensible'};
+          fmt.codec = codecMap[audioFormat] || (audioFormat === 0x0050 ? 'MPEG Layer-2/3' : (audioFormat === 0x0055 ? 'MPEG Layer-3' : `Codec #${audioFormat}`));
+          fmt.channels = ch;
+          fmt.sampleRate = sr;
+          fmt.bitDepth = bitsPerSample;
+          fmt.bitrateEst = bitrate * 8;
+          if (audioFormat === 0x0050 || audioFormat === 0x0055) fmt.lossless = false;
+        }
+        if (chunkId === 'fact') { /* WAV fact chunk */ }
+        off += 8 + chunkSize;
+      }
+      return fmt;
+    }
+  }
+
+  // RF64 / W64
+  if (sig4 === 'RF64' && bytes.byteLength > 12 && readStr(8, 4) === 'WAVE') {
+    return { container: 'RF64', codec: 'PCM', format: 'WAV (RF64)', lossless: true };
+  }
+
+  // FLAC
+  if (sig4 === 'fLaC') {
+    let fmt = { container: 'FLAC', codec: 'FLAC', format: 'FLAC', lossless: true };
+    if (bytes.byteLength > 42) {
+      // 解析 STREAMINFO
+      const siOff = 4; // fLaC + block header
+      if (readStr(siOff, 1) === '\x00') { // last-block flag + block type 0
+        // Actually STREAMINFO starts at byte 8 after fLaC marker and metadata header
+        const infoOff = 8;
+        if (infoOff + 18 <= bytes.byteLength) {
+          const info = new Uint8Array(bytes.buffer, bytes.byteOffset + infoOff, 18);
+          const minBlock = (info[0] << 8) | info[1];
+          const maxBlock = (info[2] << 8) | info[3];
+          // sample rate: 20 bits
+          const srRaw = (info[10] << 12) | (info[11] << 4) | (info[12] >> 4);
+          const chRaw = ((info[12] & 0x0E) >> 1) + 1;
+          const bpsRaw = ((info[12] & 0x01) << 4) | ((info[13] & 0xF0) >> 4);
+          const bpsMap = {0: 'REF', 1:8, 2:12, 4:16, 5:20, 6:24, 7:32};
+          fmt.sampleRate = srRaw;
+          fmt.channels = chRaw;
+          fmt.bitDepth = (bpsMap[bpsRaw] || bpsRaw);
+        }
+      }
+    }
+    return fmt;
+  }
+
+  // OGG (Vorbis / Opus)
+  if (sig4 === 'OggS') {
+    let fmt = { container: 'OGG', codec: 'Vorbis', format: 'OGG', lossless: false };
+    // Check codec by looking for Vorbis/Opus identification header
+    const pktType = bytes.byteLength > 28 ? dv.getUint8(28) : 0;
+    if (bytes.byteLength > 36) {
+      const codecSig = readStr(29, 8);
+      if (codecSig.startsWith('vorbis')) fmt.codec = 'Vorbis';
+      else if (codecSig.startsWith('OpusHea')) fmt.codec = 'Opus';
+      else {
+        // Check first few bytes of packet
+        const pktSig = readStr(28, 8);
+        if (pktSig.startsWith('OpusHea')) fmt.codec = 'Opus';
+      }
+    }
+    return fmt;
+  }
+
+  // MP3: ID3v2 标签在开头, 或 sync word 0xFFFx
+  if (sig3 === 'ID3') {
+    let fmt = { container: 'MP3', codec: 'MPEG Audio', format: 'MP3', lossless: false };
+    // Try to find first frame sync
+    for (let i = 10; i < Math.min(bytes.byteLength, 4096); i++) {
+      if (bytes[i] === 0xFF && (bytes[i + 1] & 0xE0) === 0xE0) {
+        const hdr = (bytes[i] << 8) | bytes[i + 1];
+        const versionBits = (hdr >> 19) & 3;
+        const layerBits = (hdr >> 17) & 3;
+        const bitrateIdx = (hdr >> 12) & 0xF;
+        const srIdx = (hdr >> 10) & 3;
+        const versions = ['MPEG 2.5', null, 'MPEG 2', 'MPEG 1'];
+        const layers = [null, 'Layer III', 'Layer II', 'Layer I'];
+        const srMap = {
+          'MPEG 1': [44100, 48000, 32000],
+          'MPEG 2': [22050, 24000, 16000],
+          'MPEG 2.5': [11025, 12000, 8000]
+        };
+        const ver = versions[versionBits] || 'MPEG 1';
+        const lyr = layers[layerBits] || '';
+        fmt.codec = `MPEG ${lyr}`;
+        if (srMap[ver] && srIdx < 3) {
+          fmt.sampleRate = srMap[ver][srIdx];
+        }
+        break;
+      }
+    }
+    return fmt;
+  }
+  // Raw MP3 frame (no ID3)
+  if (bytes.byteLength >= 2 && bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0) {
+    return { container: 'MP3', codec: 'MPEG Audio', format: 'MP3', lossless: false };
+  }
+
+  // MP4 / M4A / ALAC / AAC
+  if (bytes.byteLength > 12) {
+    const ftypBox = readStr(4, 4);
+    if (ftypBox === 'ftyp') {
+      const brand = readStr(8, 4);
+      const codecMap = {
+        'M4A ': 'AAC', 'mp42': 'MPEG-4', 'M4B ': 'AAC', 'M4P ': 'AAC (Protected)',
+        'alac': 'ALAC', 'ALAC': 'ALAC',
+      };
+      const losslessBrands = ['alac', 'ALAC'];
+      let fmt = {
+        container: losslessBrands.includes(brand) ? 'ALAC' : (brand === 'M4A ' ? 'M4A' : 'MP4'),
+        codec: codecMap[brand] || 'AAC',
+        format: losslessBrands.includes(brand) ? 'ALAC' : (brand === 'M4A ' ? 'M4A' : 'MP4'),
+        lossless: losslessBrands.includes(brand),
+      };
+      // Deep scan: find stsd entry type (may differ from ftyp brand)
+        if (bytes.byteLength > 36) {
+          // Search raw bytes for 'stsd' fourcc
+          const scanLimit = Math.min(bytes.byteLength, 16384);
+          for (let off = 8; off + 24 < scanLimit; off++) {
+            if (bytes[off] === 0x73 && bytes[off + 1] === 0x74 &&
+                bytes[off + 2] === 0x73 && bytes[off + 3] === 0x64) {
+              const stsdPos = off - 4; // stsd box start (size bytes before 'stsd')
+              if (stsdPos < 0 || stsdPos + 24 > bytes.byteLength) continue;
+              const entryCount = (bytes[stsdPos + 12] << 24) | (bytes[stsdPos + 13] << 16) | (bytes[stsdPos + 14] << 8) | bytes[stsdPos + 15];
+              if (entryCount > 0 && entryCount <= 100 && stsdPos + 24 <= bytes.byteLength) {
+                const entSize = (bytes[stsdPos + 16] << 24) | (bytes[stsdPos + 17] << 16) | (bytes[stsdPos + 18] << 8) | bytes[stsdPos + 19];
+                if (entSize >= 8 && stsdPos + 16 + entSize <= bytes.byteLength) {
+                  const entType = readStr(stsdPos + 20, 4);
+                  if (entType === 'alac') { fmt.codec = 'ALAC'; fmt.lossless = true; fmt.container = 'ALAC'; fmt.format = 'ALAC'; }
+                  else if (entType === 'mp4a') {
+                    const sr = (bytes[stsdPos + 40] << 8) | bytes[stsdPos + 41] || 44100;
+                    if (sr > 0 && sr < 1000000) fmt.sampleRate = sr;
+                  }
+                }
+              }
+              break;
+            }
+          }
+        }
+      return fmt;
+    }
+  }
+
+  // AIFF
+  if (sig4 === 'FORM' && bytes.byteLength > 12 && readStr(8, 4) === 'AIFF') {
+    let fmt = { container: 'AIFF', codec: 'PCM', format: 'AIFF', lossless: true };
+    // Parse COMM chunk
+    if (bytes.byteLength > 26 && readStr(12, 4) === 'COMM') {
+      const commSize = readU32BE(16);
+      const off = 20;
+      fmt.channels = readU16BE(off);
+      fmt.sampleRate = dv.getFloat64 ? Math.round(dv.getFloat64(off + 6, false)) : 0;
+      fmt.bitDepth = readU16BE(off + 4);
+    }
+    return fmt;
+  }
+  // AIFF-C
+  if (sig4 === 'FORM' && bytes.byteLength > 12 && readStr(8, 4) === 'AIFC') {
+    let fmt = { container: 'AIFF-C', codec: 'PCM', format: 'AIFF-C', lossless: true };
+    if (bytes.byteLength > 40 && readStr(12, 4) === 'COMM') {
+      fmt.channels = readU16BE(20);
+      fmt.bitDepth = readU16BE(24);
+      const compType = readStr(30, 4);
+      const compMap = {'NONE':'PCM','sowt':'PCM (swapped)','fl32':'IEEE 32-bit Float','fl64':'IEEE 64-bit Float','alaw':'A-law','ulaw':'μ-law','ALAC':'ALAC'};
+      fmt.codec = compMap[compType] || compType;
+      fmt.lossless = !compType.startsWith('a') || compType === 'NONE' || compType === 'sowt';
+    }
+    return fmt;
+  }
+
+  // Monkey's Audio (APE)
+  if (sig4 === 'MAC ' && bytes.byteLength > 32) {
+    const ver = readU16LE(4);
+    return { container: 'APE', codec: `Monkey's Audio v${(ver/1000).toFixed(2)}`, format: 'APE', lossless: true };
+  }
+
+  // WavPack (WV)
+  if (sig4 === 'wvpk') {
+    let fmt = { container: 'WavPack', codec: 'WavPack', format: 'WV', lossless: true };
+    if (bytes.byteLength > 24) {
+      const flags = readU32LE(24);
+      if (flags & 0x04) { fmt.codec = 'WavPack (Hybrid)'; fmt.lossless = false; }
+    }
+    return fmt;
+  }
+
+  // True Audio (TTA)
+  if (sig4 === 'TTA1') {
+    let fmt = { container: 'TTA', codec: 'True Audio', format: 'TTA', lossless: true };
+    if (bytes.byteLength > 22) {
+      fmt.channels = readU16LE(14);
+      fmt.bitDepth = readU16LE(16);
+      fmt.sampleRate = readU32LE(18);
+    }
+    return fmt;
+  }
+
+  // DSD (DSF)
+  if (sig4 === 'DSD ') {
+    let fmt = { container: 'DSF', codec: 'DSD', format: 'DSF', lossless: true };
+    if (bytes.byteLength > 28) {
+      const totalSize = readU32LE(12);
+      fmt.channels = readU32LE(20);
+      fmt.sampleRate = readU32LE(24); // 2822400 or 5644800
+      fmt.bitDepth = 1; // DSD is 1-bit
+    }
+    return fmt;
+  }
+
+  // DSDIFF (DFF)
+  if (sig4 === 'FRM8' && bytes.byteLength > 16 && readStr(12, 4) === 'DSD ') {
+    return { container: 'DFF', codec: 'DSD (DSDIFF)', format: 'DFF', lossless: true };
+  }
+
+  // CAF (Core Audio Format)
+  if (sig4 === 'caff') {
+    return { container: 'CAF', codec: 'Core Audio', format: 'CAF', lossless: true };
+  }
+
+  // AC3 / E-AC3
+  if (bytes.byteLength >= 2 && bytes[0] === 0x0B && bytes[1] === 0x77) {
+    return { container: 'AC-3', codec: 'Dolby AC-3', format: 'AC3', lossless: false };
+  }
+
+  // Matroska / WebM
+  if (bytes.byteLength > 4 && bytes[0] === 0x1A && bytes[1] === 0x45 && bytes[2] === 0xDF && bytes[3] === 0xA3) {
+    // Check DocType
+    const raw = String.fromCharCode(...new Uint8Array(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 256)));
+    const doctypeMatch = raw.match(/matroska|webm/i);
+    const dt = doctypeMatch ? doctypeMatch[0] : 'Matroska';
+    return {
+      container: dt === 'webm' ? 'WebM' : 'Matroska',
+      codec: 'Unknown (Matroska)', format: dt === 'webm' ? 'WebM' : 'MKA',
+      lossless: dt === 'webm' ? false : false,
+    };
+  }
+
+  // WMA / ASF
+  if (bytes.byteLength > 16) {
+    const guid = readStr(0, 16);
+    if (guid.startsWith('\x30\x26\xB2\x75\x8E\x66\xCF\x11\xA6\xD9\x00\xAA\x00\x62\xCE\x6C')) {
+      return { container: 'ASF', codec: 'WMA', format: 'WMA', lossless: false };
+    }
+  }
+
+  return null; // 未知格式
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  策略⑦: 内嵌 MP4 解析器 + WebCodecs (0 网络, 纯本地)
+// ═══════════════════════════════════════════════════════════════
+
+function parseMP4BoxTree(rawBytes) {
+  // 单次遍历解析 ISO BMFF box 树, 返回 { boxes, mdatOffset }
+  const data = rawBytes;
+  const len = data.length;
+  const result = { boxes: {}, mdatOffset: -1, mdatSize: 0 };
+  let pos = 0;
+
+  function readU32(p) { return (data[p] << 24) | (data[p + 1] << 16) | (data[p + 2] << 8) | data[p + 3]; }
+  function readStr(p, n) { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(data[p + i]); return s; }
+
+  function parseBox(parentObj) {
+     while (pos + 8 <= len) {
+       let size = readU32(pos);
+       const type = readStr(pos + 4, 4);
+       let headerSize = 8;
+       if (size === 1) { size = Number((BigInt(readU32(pos + 8)) << 32n) | BigInt(readU32(pos + 12))); headerSize = 16; }
+       if (size === 0 || size < headerSize || pos + size > len) break;
+
+       const contentStart = pos + headerSize;
+       const contentEnd = pos + size;
+       const subData = data.subarray(contentStart, contentEnd);
+       const isContainer = type === 'moov' || type === 'trak' || type === 'mdia' || type === 'minf' || type === 'stbl';
+
+       // 顶级 box
+       if (parentObj === result.boxes) {
+         if (type === 'mdat') { result.mdatOffset = contentStart; result.mdatSize = size - headerSize; }
+         result.boxes[type] = isContainer ? { _children: [] } : subData;
+       }
+
+       // 递归进入容器 box (必须先递归，后存 child 才能存 container 对象)
+       if (isContainer) {
+         const saved = pos;
+         pos = contentStart;
+         const container = parentObj === result.boxes ? result.boxes[type] : { _children: [] };
+         parseBox(container);
+         if (parentObj !== result.boxes && parentObj) {
+           if (!parentObj._children) parentObj._children = [];
+           parentObj._children.push({ type, data: container });
+         }
+         pos = saved;
+       } else if (parentObj && parentObj !== result.boxes) {
+         // 叶子 box: 直接存储 raw data
+         if (!parentObj._children) parentObj._children = [];
+         parentObj._children.push({ type, data: subData });
+       }
+
+       pos += size;
+     }
+   }
+
+  parseBox(result.boxes);
+  return result;
+}
+
+function findChild(parent, type) {
+  if (!parent || !parent._children) return null;
+  for (const c of parent._children) if (c.type === type) return c.data;
+  return null;
+}
+
+function findAllChildren(parent, type) {
+  const results = [];
+  if (parent && parent._children) for (const c of parent._children) if (c.type === type) results.push(c.data);
+  return results;
+}
+
+function extractMP4Info(rawBytes, tree) {
+  // 从 box 树提取音频参数和 AudioSpecificConfig
+  const info = { sampleRate: 44100, channels: 2, config: null, codec: 'mp4a.40.2' };
+
+  try {
+    const moov = tree.boxes.moov;
+    if (!moov || !moov._children) return info;
+
+    const traks = findAllChildren(moov, 'trak');
+    for (const trak of traks) {
+      if (!trak._children) continue;
+      const mdia = findChild(trak, 'mdia');
+      if (!mdia || !mdia._children) continue;
+
+      // 检查 handler type: soun = 音频
+      const hdlr = findChild(mdia, 'hdlr');
+      if (!hdlr) continue;
+      if (hdlr.length >= 12 && readStrHelper(hdlr, 8, 4) !== 'soun') continue;
+
+      const minf = findChild(mdia, 'minf');
+      if (!minf || !minf._children) continue;
+      const stbl = findChild(minf, 'stbl');
+      if (!stbl || !stbl._children) continue;
+
+      // stsd 是 raw bytes (非容器), 手动解析 entries
+      const stsd = findChild(stbl, 'stsd');
+      if (!stsd || stsd.length < 16) { D.warn('WC', `stsd 未找到或太短: ${stsd ? stsd.length : 'null'}B`); continue; }
+
+      // stsd fullBox: version(1)+flags(3)+entryCount(4) = 8 bytes
+      const entryCount = (stsd[4] << 24) | (stsd[5] << 16) | (stsd[6] << 8) | stsd[7];
+      D.info('WC', `stsd: ${stsd.length}B, ${entryCount} entries`);
+      let pos = 8;
+      for (let e = 0; e < Math.min(entryCount, 10); e++) {
+        if (pos + 8 > stsd.length) break;
+        const entSize = (stsd[pos] << 24) | (stsd[pos + 1] << 16) | (stsd[pos + 2] << 8) | stsd[pos + 3];
+        const entType = readStrHelper(stsd, pos + 4, 4);
+        D.info('WC', `  entry[${e}]: ${entType} size=${entSize}`);
+        if (entSize < 8 || pos + entSize > stsd.length) break;
+        const entData = stsd.subarray(pos + 8, pos + entSize);
+
+        if (entType === 'mp4a' && entData.length >= 28) {
+          info.channels = (entData[16] << 8) | entData[17];
+          const sr32 = (entData[24] << 24) | (entData[25] << 16) | (entData[26] << 8) | entData[27];
+          const srFixed = sr32 >>> 16;
+          info.sampleRate = (srFixed >= 3000 && srFixed <= 768000) ? srFixed : (sr32 >= 3000 && sr32 <= 768000) ? sr32 : 44100;
+          D.info('WC', `  mp4a: ${entData.length}B, ch${info.channels} sr${info.sampleRate}`);
+          // 从 mp4a 中解析子 box (跳过 28 字节 AudioSampleEntry header)
+          if (entData.length > 28) {
+            let subPos = 28;
+            while (subPos + 8 <= entData.length) {
+              const subSize = (entData[subPos] << 24) | (entData[subPos + 1] << 16) | (entData[subPos + 2] << 8) | entData[subPos + 3];
+              const subType = readStrHelper(entData, subPos + 4, 4);
+              D.info('WC', `    sub: ${subType} size=${subSize} @${subPos}`);
+              if (subSize < 8 || subPos + subSize > entData.length) break;
+              if (subType === 'esds') {
+                D.info('WC', `    esds: ${subSize}B raw`);
+                info.config = extractASCFromESDS(entData.subarray(subPos + 8, subPos + subSize));
+                D.info('WC', `    ASC: ${info.config ? '['+Array.from(info.config).map(b=>b.toString(16).padStart(2,'0')).join(' ')+']' : 'null'}`);
+              }
+              subPos += subSize;
+            }
+          } else {
+            D.warn('WC', '  mp4a too short for sub-boxes');
+          }
+          const objType = entData.length >= 33 ? (entData[32] >> 3) & 0x1f : 2;
+          info.codec = `mp4a.40.${objType}`;
+        }
+
+        if (entType === 'alac' && entData.length >= 28) {
+          info.channels = (entData[16] << 8) | entData[17];
+          const sr32 = (entData[24] << 24) | (entData[25] << 16) | (entData[26] << 8) | entData[27];
+          const srFixed = sr32 >>> 16;
+          info.sampleRate = (srFixed >= 3000 && srFixed <= 768000) ? srFixed : (sr32 >= 3000 && sr32 <= 768000) ? sr32 : 44100;
+          D.info('WC', `  alac: ${entData.length}B, ch${info.channels} sr${info.sampleRate}`);
+          info.codec = 'alac';
+          // ALAC magic cookie 在 'alac' 子 box 中
+          if (entData.length > 28) {
+            let subPos = 28;
+            while (subPos + 8 <= entData.length) {
+              const subSize = (entData[subPos] << 24) | (entData[subPos + 1] << 16) | (entData[subPos + 2] << 8) | entData[subPos + 3];
+              const subType = readStrHelper(entData, subPos + 4, 4);
+              D.info('WC', `    sub: ${subType} size=${subSize} @${subPos}`);
+              if (subSize < 8 || subPos + subSize > entData.length) break;
+              if (subType === 'alac') {
+                D.info('WC', `    alac cookie: ${subSize}B`);
+                info.config = entData.subarray(subPos + 8, subPos + subSize);
+              }
+              subPos += subSize;
+            }
+          }
+        }
+        pos += entSize;
+      }
+
+      // 提取样本表
+      info.stsz = findChild(stbl, 'stsz');
+      info.stco = findChild(stbl, 'stco');
+      info.co64 = findChild(stbl, 'co64');
+      info.stsc = findChild(stbl, 'stsc');
+      info.stts = findChild(stbl, 'stts');
+      break;
+    }
+  } catch (e) {
+    D.warn('WC', '提取 MP4 信息异常: ' + e.message);
+  }
+  return info;
+}
+
+function readStrHelper(data, offset, len) {
+  let s = ''; for (let i = 0; i < len && offset + i < data.length; i++) s += String.fromCharCode(data[offset + i]); return s;
+}
+
+function extractASCFromESDS(esds) {
+  // esds box → DecoderConfigDescriptor(tag=0x04) → DecoderSpecificInfo(tag=0x05)
+  // Skip esds version/flags header (4 bytes)
+  const data = esds.length > 4 ? esds.subarray(4) : esds;
+  for (let i = 0; i + 2 < data.length; i++) {
+    if (data[i] === 0x04) {
+      // DecoderConfigDescriptor: tag(0x04) + length(varint) + objType(1) +
+      //   streamType+flags(1) + bufferSizeDB(3) + maxBitrate(4) + avgBitrate(4)
+      let j = i + 1;
+      if (j >= data.length) continue;
+      let len = data[j]; j++;
+      if (len === 0x80) { while (j < data.length && data[j] & 0x80) j++; j++; }
+      if (j >= data.length) continue;
+      j += 1; // objTypeIndication
+      j += 1 + 3 + 4 + 4; // streamType+flags(1) + bufferSizeDB(3) + maxBitrate(4) + avgBitrate(4) = 12
+      // Now look for DecoderSpecificInfo tag=0x05
+      for (let k = j; k + 1 < data.length && k < i + 60; k++) {
+        if (data[k] === 0x05) {
+          const ascLen = Math.min(data[k + 1], 16);
+          if (ascLen > 0) return esds.slice(esds.length - data.length + k + 2, esds.length - data.length + k + 2 + ascLen);
+        }
+      }
+    }
+  }
+  return null;
+}
+
+function parseSampleTable(rawBytes, tree, info) {
+  // 从已解析的 box 数据读取样本表
+  const data = (box) => box; // box 就是 Uint8Array
+
+  function readU32(arr, p) {
+    return (arr[p] << 24) | (arr[p + 1] << 16) | (arr[p + 2] << 8) | arr[p + 3];
+  }
+
+  // stsz
+  const sampleSizes = [];
+  const stsz = info.stsz;
+  if (stsz && stsz.length >= 12) {
+    const sampleSize = readU32(stsz, 4);
+    const entryCount = readU32(stsz, 8);
+    if (sampleSize === 0) {
+      for (let i = 0; i < Math.min(entryCount, 100000); i++) {
+        sampleSizes.push(readU32(stsz, 12 + i * 4));
+      }
+    } else {
+      for (let i = 0; i < Math.min(entryCount, 100000); i++) sampleSizes.push(sampleSize);
+    }
+  }
+
+  // stco / co64
+  const chunkOffsets = [];
+  const co = info.stco || info.co64;
+  if (co && co.length >= 8) {
+    const entryCount = readU32(co, 4);
+    for (let i = 0; i < Math.min(entryCount, 100000); i++) {
+      chunkOffsets.push(readU32(co, 8 + i * 4));
+    }
+  }
+
+  // stsc
+  const stscEntries = [];
+  const stsc = info.stsc;
+  if (stsc && stsc.length >= 8) {
+    const entryCount = readU32(stsc, 4);
+    for (let i = 0; i < Math.min(entryCount, 1000); i++) {
+      stscEntries.push({
+        firstChunk: readU32(stsc, 8 + i * 12),
+        samplesPerChunk: readU32(stsc, 12 + i * 12),
+      });
+    }
+  }
+
+  if (sampleSizes.length === 0 || chunkOffsets.length === 0) return [];
+
+  // 计算每帧偏移
+  const frames = [];
+  const sr = info.sampleRate || 44100;
+  let chunkIdx = 0, sampleInChunk = 0;
+  let ts = 0;
+
+  for (let s = 0; s < sampleSizes.length; s++) {
+    let spc = 1;
+    for (let e = stscEntries.length - 1; e >= 0; e--) {
+      if (chunkIdx + 1 >= stscEntries[e].firstChunk) { spc = stscEntries[e].samplesPerChunk; break; }
+    }
+    if (sampleInChunk === 0 && chunkIdx < chunkOffsets.length) {
+      const off = chunkOffsets[chunkIdx];
+      if (off > 0 && off + sampleSizes[s] <= rawBytes.length) {
+        frames.push({ offset: off, size: sampleSizes[s], timestamp: ts });
+      }
+    } else {
+      // 同一 chunk 后续帧
+      if (frames.length > 0) {
+        const prev = frames[frames.length - 1];
+        const off = prev.offset + prev.size;
+        if (off + sampleSizes[s] <= rawBytes.length) {
+          frames.push({ offset: off, size: sampleSizes[s], timestamp: ts });
+        }
+      }
+    }
+    ts += Math.round(1024000000 / sr);
+    sampleInChunk++;
+    if (sampleInChunk >= spc) { chunkIdx++; sampleInChunk = 0; }
+  }
+
+  return frames;
+}
+
+async function decodeWithWebCodecs(rawBytes) {
+  if (typeof AudioDecoder === 'undefined') throw new Error('浏览器不支持 WebCodecs (需 Chrome/Edge 94+)');
+
+  // 解析 box 树 (单次遍历)
+  const tree = parseMP4BoxTree(rawBytes);
+  if (tree.mdatOffset < 0) throw new Error('MP4 无 mdat box');
+
+  const info = extractMP4Info(rawBytes, tree);
+  const frames = parseSampleTable(rawBytes, tree, info);
+
+  if (frames.length === 0) throw new Error('无法解析帧数据');
+  D.info('WC', `${frames.length}帧 ${info.sampleRate}Hz ${info.channels}ch ${info.codec}${info.config ? ' 有ASC' : ' 无ASC'}`);
+
+  const config = {
+    codec: info.codec,
+    sampleRate: info.sampleRate,
+    numberOfChannels: info.channels,
+  };
+  if (info.config) {
+    config.description = info.config.buffer.slice(info.config.byteOffset, info.config.byteOffset + info.config.byteLength);
+    D.info('WC', `ASC: [${Array.from(info.config).map(b => b.toString(16).padStart(2,'0')).join(' ')}]`);
+  }
+
+  // 先检查浏览器是否支持该 codec（无需创建 decoder）
+  let support = await AudioDecoder.isConfigSupported(config);
+  D.info('WC', `isConfigSupported: ${support.supported ? 'YES' : 'NO'}${support.supported ? '' : ' → 尝试备选方案'}`);
+  if (!support.supported && config.description) {
+    D.info('WC', '尝试不带 description 的配置...');
+    const configNoDesc = { codec: config.codec, sampleRate: config.sampleRate, numberOfChannels: config.numberOfChannels };
+    support = await AudioDecoder.isConfigSupported(configNoDesc);
+    D.info('WC', `isConfigSupported(no desc): ${support.supported ? 'YES' : 'NO'}`);
+    if (support.supported) {
+      config.description = undefined;
+    }
+  }
+  if (!support.supported) {
+    throw new Error(`浏览器不支持 ${info.codec} 解码 (WebCodecs AudioDecoder)`);
+  }
+
+  const outputFrames = [];
+  let error = null;
+
+  const decoder = new AudioDecoder({
+    output(f) { outputFrames.push(f); },
+    error(e) { error = e; D.err('WC', `解码错误 (帧#${outputFrames.length}): ${e.message}`); }
+  });
+  decoder.configure(config);
+
+  const isALAC = info.codec === 'alac';
+  // ALAC frameLength: magic cookie (QuickTime FullBox, +4 offset), 0=默认4096
+  let samplesPerFrame = 1024; // AAC 默认
+  if (isALAC) {
+    if (info.config && info.config.length >= 8) {
+      const rawFL = (info.config[4] << 24) | (info.config[5] << 16) | (info.config[6] << 8) | info.config[7];
+      samplesPerFrame = (rawFL > 0) ? rawFL : 4096; // frameLength=0 → 默认 4096
+      D.info('WC', `ALAC frameLength raw=${rawFL}, actual=${samplesPerFrame}`);
+    } else {
+      samplesPerFrame = 4096;
+    }
+  }
+  const actualFrameDur = Math.round(samplesPerFrame * 1000000 / info.sampleRate);
+  D.info('WC', `frame=${samplesPerFrame}samples dur=${actualFrameDur}μs`);
+  
+  let ts = 0;
+  for (let i = 0; i < frames.length; i++) {
+    const f = frames[i];
+    if (f.offset + f.size > rawBytes.length) continue;
+    const chunk = new EncodedAudioChunk({
+      type: 'key',
+      timestamp: ts,
+      duration: actualFrameDur,
+      data: rawBytes.subarray(f.offset, f.offset + f.size),
+    });
+    ts += actualFrameDur;
+    try { decoder.decode(chunk); }
+    catch (e) { D.warn('WC', `帧${i}入队失败: ${e.message}`); }
+    if (error) break;
+  }
+
+  await decoder.flush().catch(() => {});
+  decoder.close();
+
+  if (outputFrames.length === 0) throw new Error('解码失败: ' + (error?.message || '无输出'));
+
+  D.ok('WC', `解码成功: ${outputFrames.length} PCM 帧`);
+  return buildAudioBuffer(outputFrames, info.sampleRate, info.channels);
+}
+
+function buildAudioBuffer(frames, sr, ch) {
+  const totalSamples = frames.reduce((s, f) => s + f.numberOfFrames, 0);
+  const buffer = audioCtx.createBuffer(ch, totalSamples, sr);
+  let writePos = 0;
+
+  for (const frame of frames) {
+    const N = frame.numberOfFrames;
+    if (writePos + N > totalSamples) { frame.close(); continue; }
+    const interleaved = new Float32Array(N * ch);
+    frame.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
+    for (let c = 0; c < ch; c++) {
+      const dst = buffer.getChannelData(c);
+      for (let s = 0; s < N; s++) dst[writePos + s] = interleaved[s * ch + c];
+    }
+    writePos += N;
+    frame.close();
+  }
+  return buffer;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  纯 JS ALAC 解码器 (Apple Lossless, 零依赖, 基于 Apple alac.c)
+// ═══════════════════════════════════════════════════════════════
+
+function createALACBitReader(data, offset, length) {
+  const end = Math.min(offset + length, data.length);
+  let pos = offset;
+  let bitBuf = 0, bitCount = 0;
+  return {
+    fill(n) {
+      while (bitCount < n && pos < end) { bitBuf = (bitBuf << 8) | data[pos++]; bitCount += 8; }
+      return bitCount >= n;
+    },
+    readBit() { this.fill(1); const b = (bitBuf >> (bitCount - 1)) & 1; bitCount--; return b; },
+    readBits(n) { this.fill(n); const v = (bitBuf >> (bitCount - n)) & ((1 << n) - 1); bitCount -= n; return v; },
+    readSigned(n) { let v = this.readBits(n); if (v & (1 << (n - 1))) v -= 1 << n; return v; },
+    skipBits(n) { while (n > 0) { const s = Math.min(n, bitCount); bitCount -= s; n -= s; if (n > 0 && pos < end) { pos++; n -= 8 - bitCount; bitCount = 0; } } },
+    bytePos() { return pos - (bitCount > 0 ? Math.ceil(bitCount / 8) : 0) - offset; },
+  };
+}
+
+function decodeALACFramesToPCM(frameDataList, config, sampleRate, channels) {
+  // 解析 magic cookie (QuickTime FullBox: 前4字节 = version+flags, ALACSpecificConfig 从 index 4 开始)
+  if (!config || config.length < 28) throw new Error('ALAC config too short: ' + (config ? config.length : 0));
+  
+  const frameLengthRaw = (config[4] << 24) | (config[5] << 16) | (config[6] << 8) | config[7];
+  const frameLength = frameLengthRaw > 0 ? frameLengthRaw : 4096;
+  const compatibleVersion = config[8];
+  const bitDepth = config[9] || 16;
+  const pb = config[10];    // predictor history (max prediction order)
+  const mb = config[11];    // rice history multiplier
+  const kb = config[12];    // rice initial history
+  const numChannelsInConfig = config[13];
+  const maxRun = (config[14] << 8) | config[15];
+  const maxFrameBytes = (config[16] << 24) | (config[17] << 16) | (config[18] << 8) | config[19];
+  const avgBitRate = (config[20] << 24) | (config[21] << 16) | (config[22] << 8) | config[23];
+  const configSampleRate = (config[24] << 24) | (config[25] << 16) | (config[26] << 8) | config[27];
+
+  D.info('ALAC', `decoder: frameLen=${frameLength} bitDepth=${bitDepth} ch=${channels} pb=${pb} mb=${mb} kb=${kb} maxRun=${maxRun} sr=${configSampleRate}`);
+
+  const actualSampleRate = sampleRate || configSampleRate || 44100;
+  const totalFrames = frameDataList.length;
+  
+  // 预估总采样数
+  let totalSamplesEst = totalFrames * frameLength;
+  const output = new Float32Array(totalSamplesEst * channels);
+  let outputPos = 0;
+
+  // 解码每个帧
+  for (let fi = 0; fi < totalFrames; fi++) {
+    const fd = frameDataList[fi];
+    const reader = createALACBitReader(fd.data, 0, fd.size);
+    
+    // 每通道单独的子帧
+    const channelSamples = [];
+    
+    for (let ch = 0; ch < channels; ch++) {
+      const predictionType = reader.readBits(4);
+      const predictionQuant = reader.readBits(4);
+      const riceModifier = reader.readBits(3);
+      const predictorOrder = reader.readBits(5);
+      
+      // 读取预测系数
+      const predictorCoefs = new Int32Array(predictorOrder);
+      for (let i = 0; i < predictorOrder; i++) {
+        predictorCoefs[i] = reader.readSigned(16);
+      }
+      
+      // 当前帧的实际采样数 (最后一帧可能少于 frameLength)
+      let samplesThisFrame = frameLength;
+      
+      const samples = new Int32Array(samplesThisFrame);
+      
+      if (predictionType === 15) {
+        // 类型 15: 无压缩，直接读取有符号样本
+        for (let i = 0; i < samplesThisFrame; i++) {
+          samples[i] = reader.readSigned(bitDepth);
+        }
+      } else if (predictionType === 14) {
+        // 类型 14: 无预测，仅 Rice 解码
+        let k = kb;
+        let history = 0;
+
+        for (let i = 0; i < samplesThisFrame; i++) {
+          // Rice 解码: unary quotient + k-bit remainder
+          let leadingZeros = 0;
+          while (reader.readBit() === 0) {
+            leadingZeros++;
+            if (leadingZeros > maxRun + 64) break; // 安全上限
+          }
+
+          let value;
+          if (leadingZeros < Math.min(maxRun, 255)) {
+            value = (leadingZeros << k) | (k > 0 ? reader.readBits(k) : 0);
+          } else {
+            value = reader.readBits(bitDepth); // escape
+          }
+
+          if (value !== 0 && reader.readBit() === 1) value = -value;
+
+          samples[i] = value;
+
+          // 更新 Rice 参数 k
+          history += value;
+          if (value < 0) history -= value;
+          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
+          else if (history < -(128 << mb) && k > 0) { k--; history += (128 << mb); }
+        }
+      } else {
+        // 类型 0-13: 线性预测 + Rice 解码
+        let k = kb;
+        let history = 0;
+
+        for (let i = 0; i < samplesThisFrame; i++) {
+          // 预测值
+          let prediction = 0;
+          for (let j = 0; j < predictorOrder && i - 1 - j >= 0; j++) {
+            prediction += predictorCoefs[j] * samples[i - 1 - j];
+          }
+          prediction >>= predictionQuant;
+
+          // Rice 解码残差
+          let leadingZeros = 0;
+          while (reader.readBit() === 0) {
+            leadingZeros++;
+            if (leadingZeros > maxRun + 64) break; // 安全上限
+          }
+
+          let residual;
+          if (leadingZeros < Math.min(maxRun, 255)) {
+            residual = (leadingZeros << k) | (k > 0 ? reader.readBits(k) : 0);
+          } else {
+            residual = reader.readBits(bitDepth);
+          }
+
+          if (residual !== 0 && reader.readBit() === 1) residual = -residual;
+
+          const sample = prediction + residual;
+          samples[i] = sample;
+
+          // 更新 k
+          history += residual;
+          if (residual < 0) history -= residual;
+          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
+          else if (history < -(128 << mb) && k > 0) { k--; history += (128 << mb); }
+        }
+      }
+      
+      channelSamples.push(samples);
+    }
+    
+    // 将解交织的通道样本写入输出 buffer
+    const frameSampleCount = channelSamples[0].length;
+    const maxVal = 1 << (bitDepth - 1);
+    
+    for (let s = 0; s < frameSampleCount; s++) {
+      for (let ch = 0; ch < channels; ch++) {
+        if (outputPos + ch >= output.length) break;
+        const val = channelSamples[ch][s] / maxVal;
+        output[outputPos + ch] = isFinite(val) ? val : 0;
+      }
+      outputPos += channels;
+    }
+  }
+  
+  // 裁剪到实际大小
+  D.ok('ALAC', `解码完成: ${outputPos / channels} 采样点, ${(outputPos / channels / actualSampleRate).toFixed(2)}s`);
+  return output.subarray(0, outputPos);
+}
+
+function createAudioBufferFromPCM(pcmData, sampleRate, channels) {
+  const samplesPerChannel = pcmData.length / channels;
+  const buffer = audioCtx.createBuffer(channels, samplesPerChannel, sampleRate);
+  
+  // pcmData 是交错的 (L,R,L,R,...)，需要分解到各通道
+  for (let c = 0; c < channels; c++) {
+    const channelData = buffer.getChannelData(c);
+    for (let i = 0; i < samplesPerChannel; i++) {
+      channelData[i] = pcmData[i * channels + c];
+    }
+  }
+  return buffer;
+}
+
+async function decodeALACWithPureJS(rawBytes) {
+  // 复用 MP4 解析器提取帧数据和配置
+  const tree = parseMP4BoxTree(rawBytes);
+  if (tree.mdatOffset < 0) throw new Error('MP4 无 mdat box');
+
+  const info = extractMP4Info(rawBytes, tree);
+  if (info.codec !== 'alac') throw new Error('非 ALAC 编码: ' + info.codec);
+  if (!info.config || info.config.length < 28) throw new Error('ALAC config 无效 (需≥28B, 实际' + (info.config ? info.config.length : 0) + 'B)');
+
+  const frames = parseSampleTable(rawBytes, tree, info);
+  if (frames.length === 0) throw new Error('无法解析帧数据');
+
+  D.info('ALAC', `纯 JS 解码: ${frames.length} 帧, ${info.sampleRate}Hz, ${info.channels}ch`);
+
+  // 构造帧数据列表 (含实际 data 引用)
+  const frameDataList = frames.map(f => ({
+    data: rawBytes.subarray(f.offset, f.offset + f.size),
+    size: f.size,
+  }));
+
+  // 纯 JS 解码
+  const pcm = decodeALACFramesToPCM(frameDataList, info.config, info.sampleRate, info.channels);
+  
+  // 构建 AudioBuffer
+  return createAudioBufferFromPCM(pcm, info.sampleRate, info.channels);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  FFmpeg.wasm 兜底加载（可选）
+// ═══════════════════════════════════════════════════════════════
+
+let ffmpegReady = false;
+let FFmpeg = null;
+let ffmpegLoading = false;
+let ffmpegFailed = false; // 首次全失败后缓存, 避免重复 60s 等待
+
+async function initFFmpegFallback() {
+  if (ffmpegLoading) return;
+  ffmpegLoading = true;
+
+  const CORE_VER = '0.12.6';
+  const FFMPEG_VER = '0.12.10';
+  const CDN_LIST = [
+    // bootcdn — 国内 CDN 通常可访问
+    { js: `https://cdn.bootcdn.net/ajax/libs/ffmpeg/0.12.10/ffmpeg.min.js`, core: `https://cdn.bootcdn.net/ajax/libs/ffmpeg-core/0.12.6/ffmpeg-core.js` },
+    // jsdelivr — 国际 CDN
+    { js: `https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/ffmpeg.min.js`, core: `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VER}/dist/ffmpeg-core.js` },
+    // esm.sh — 备用
+    { js: `https://esm.sh/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/ffmpeg.min.js`, core: `https://esm.sh/@ffmpeg/core@${CORE_VER}/dist/ffmpeg-core.js` },
+    // unpkg — 原始源
+    { js: `https://unpkg.com/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/ffmpeg.min.js`, core: `https://unpkg.com/@ffmpeg/core@${CORE_VER}/dist/ffmpeg-core.js` },
+    // jsdelivr 国内镜像 (fastly)
+    { js: `https://fastly.jsdelivr.net/npm/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/ffmpeg.min.js`, core: `https://fastly.jsdelivr.net/npm/@ffmpeg/core@${CORE_VER}/dist/ffmpeg-core.js` },
+    // gcore 镜像
+    { js: `https://gcore.jsdelivr.net/npm/@ffmpeg/ffmpeg@${FFMPEG_VER}/dist/ffmpeg.min.js`, core: `https://gcore.jsdelivr.net/npm/@ffmpeg/core@${CORE_VER}/dist/ffmpeg-core.js` },
+  ];
+
+  for (let i = 0; i < CDN_LIST.length; i++) {
+    const cdn = CDN_LIST[i];
+    D.info('FFM', `尝试加载 FFmpeg CDN #${i + 1}/${CDN_LIST.length}: ${(cdn.js).split('/')[2]}`);
+    try {
+      const mod = await PromiseWithTimeout(import(cdn.js), 8000);
+      const { createFFmpeg, fetchFile } = mod;
+      FFmpeg = createFFmpeg({ log: false, corePath: cdn.core });
+      D.info('FFM', 'FFmpeg JS 加载成功，正在加载 WASM...');
+      await PromiseWithTimeout(FFmpeg.load(), 15000);
+      ffmpegReady = true;
+      D.ok('FFM', `FFmpeg.wasm 就绪 ✓ (CDN: ${(cdn.js).split('/')[2]})`);
+      ffmpegLoading = false;
+      return;
+    } catch (e) {
+      D.warn('FFM', `CDN #${i + 1} 失败: ${e.message}`);
+    }
+  }
+  D.err('FFM', '所有 CDN 源均无法访问');
+  ffmpegFailed = true;
+  ffmpegLoading = false;
+}
+
+function PromiseWithTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`超时 ${ms}ms`)), ms))
+  ]);
+}
+
+async function decodeViaAudioElement(file) {
+  // 使用 <audio> 元素解码 — 浏览器内置 codec 支持更广
+  // 先确保 AudioContext 运行
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+  // 尝试两种 URL 创建方式
+  const strategies = [
+    () => URL.createObjectURL(file),
+    () => URL.createObjectURL(new Blob([file], { type: 'audio/mp4' })),
+    () => URL.createObjectURL(new Blob([file], { type: file.type || 'audio/x-m4a' })),
+  ];
+
+  let lastErr = null;
+  let strategyIdx = 0;
+  for (const createUrl of strategies) {
+    strategyIdx++;
+    try {
+      const url = createUrl();
+      D.info('AEL', `策略#${strategyIdx}: ${url.substring(0, 50)}... (type=${file.type || 'none'})`);
+      const buf = await tryAudioElementDecode(url, file.name);
+      if (buf) return buf;
+    } catch (e) {
+      D.warn('AEL', `策略#${strategyIdx} 失败: ${e.message}`);
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('所有 Audio Element 策略均失败');
+}
+
+function tryAudioElementDecode(url, fname) {
+  return new Promise((resolve, reject) => {
+    D.info('AEL', `尝试解码: ${fname}`);
+    const audio = document.createElement('audio');
+    audio.style.display = 'none';
+    document.body.appendChild(audio); // 必须挂 DOM 某些浏览器才加载
+    audio.volume = 0;
+    audio.preload = 'auto';
+    let finished = false;
+
+    const cleanup = () => {
+      if (!finished) audio.pause();
+      audio.removeAttribute('src');
+      audio.remove();
+      URL.revokeObjectURL(url);
+    };
+
+    const fail = (msg) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      reject(new Error(msg));
+    };
+
+    audio.onerror = () => {
+      const codes = {1:'ABORTED',2:'NETWORK',3:'DECODE',4:'SRC_NOT_SUPPORTED'};
+      fail(`AEL错误: ${codes[audio.error?.code] || '?'} (net=${audio.networkState} ready=${audio.readyState})`);
+    };
+
+    audio.onloadedmetadata = () => {
+      if (finished) return;
+      const dur = audio.duration;
+      D.info('AEL', `metadata: dur=${dur.toFixed(1)}s`);
+      if (!isFinite(dur) || dur <= 0) { fail('无有效时长'); return; }
+
+      const sr = audioCtx.sampleRate;
+      const totalSamples = Math.ceil(dur * sr) + 8192;
+      const buffers = [new Float32Array(totalSamples), new Float32Array(totalSamples)];
+      let writePos = 0;
+
+      let source;
+      try { source = audioCtx.createMediaElementSource(audio); }
+      catch (e) { fail('createMediaElementSource: ' + e.message); return; }
+
+      const script = audioCtx.createScriptProcessor(4096, 2, 2);
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0;
+      source.connect(gain);
+      gain.connect(script);
+      script.connect(audioCtx.destination);
+
+      script.onaudioprocess = (e) => {
+        if (finished) return;
+        const L = e.inputBuffer.getChannelData(0), R = e.inputBuffer.getChannelData(1);
+        const len = L.length;
+        if (writePos + len <= totalSamples) {
+          buffers[0].set(L, writePos); buffers[1].set(R, writePos);
+          writePos += len;
+        } else if (writePos < totalSamples) {
+          const c = totalSamples - writePos;
+          buffers[0].set(L.subarray(0, c), writePos); buffers[1].set(R.subarray(0, c), writePos);
+          writePos += c;
+        }
+      };
+
+      audio.onended = () => {
+        if (finished) return;
+        finished = true;
+        D.ok('AEL', `解码完成: ${writePos}采样 (${(writePos/sr).toFixed(1)}s)`);
+        script.onaudioprocess = null;
+        source.disconnect(); script.disconnect(); gain.disconnect();
+        cleanup();
+        if (writePos > 0) {
+          try {
+            const buf = audioCtx.createBuffer(2, writePos > totalSamples ? totalSamples : writePos, sr);
+            const N = Math.min(writePos, totalSamples);
+            buf.getChannelData(0).set(buffers[0].subarray(0, N));
+            buf.getChannelData(1).set(buffers[1].subarray(0, N));
+            resolve(buf);
+          } catch(e) { reject(new Error('构建Buffer失败')); }
+        } else {
+          reject(new Error('无采集数据'));
+        }
+      };
+
+      // 超时
+      setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        D.warn('AEL', `超时: ${writePos}采样`);
+        script.onaudioprocess = null;
+        source.disconnect(); script.disconnect(); gain.disconnect();
+        cleanup();
+        if (writePos > 4096) {
+          const N = Math.min(writePos, totalSamples);
+          const buf = audioCtx.createBuffer(2, N, sr);
+          buf.getChannelData(0).set(buffers[0].subarray(0, N));
+          buf.getChannelData(1).set(buffers[1].subarray(0, N));
+          resolve(buf);
+        } else { reject(new Error('超时')); }
+      }, Math.max(dur * 3000, 60000));
+
+      D.info('AEL', '调用 play()...');
+      audio.play().catch(e => { fail('play拒绝: ' + e.message); });
+    };
+
+    audio.src = url;
+  });
+}
+
+async function decodeWithFFmpeg(file, rawBytes) {
+  if (!ffmpegReady) throw new Error('FFmpeg 未就绪');
+  D.info('FFM', 'FFmpeg 解码中...');
+  FFmpeg.FS('writeFile', 'input', rawBytes);
+  const t0 = performance.now();
+  await FFmpeg.run('-i', 'input', '-f', 'f32le', '-acodec', 'pcm_f32le', '-ar', '48000', '-ac', '2', 'output.pcm');
+  D.info('FFM', `转码耗时 ${((performance.now()-t0)/1000).toFixed(1)}s`);
+  const pcm = FFmpeg.FS('readFile', 'output.pcm');
+  FFmpeg.FS('unlink', 'input');
+  FFmpeg.FS('unlink', 'output.pcm');
+  const samples = new Float32Array(pcm.buffer);
+  const sr = 48000, ch = 2;
+  const buffer = audioCtx.createBuffer(ch, samples.length / ch, sr);
+  for (let c = 0; c < ch; c++) {
+    const d = buffer.getChannelData(c);
+    for (let i = 0; i < samples.length / ch; i++) d[i] = samples[i * ch + c];
+  }
+  D.ok('FFM', `解码完成: ${ch}ch ${sr}Hz ${buffer.duration.toFixed(1)}s`);
+  return buffer;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  文件处理流程
+// ═══════════════════════════════════════════════════════════════
+
+async function processFiles(files) {
+  const savedEntries = D.entries.slice(); // 保留初始化阶段日志(如 FFmpeg CDN 失败)
+  D._suppressDOM = false;
+  D.reset();
+  for (const e of savedEntries) D.log(e.level, e.tag, e.msg);
+  D.info('FILE', `接收 ${files.length} 个文件`);
+  STATE.batchResults = [];
+  STATE.batchIndex = -1;
+
+  const total = files.length;
+  for (let i = 0; i < total; i++) {
+    const file = files[i];
+    const idx = i + 1;
+    showLoading(true, `分析中 ${idx}/${total}: ${file.name}`);
+    D.info('FILE', `[${idx}/${total}] ${file.name} (${(file.size/1024).toFixed(0)} KB)`);
+
+    try {
+      const result = await processSingleFile(file);
+      STATE.batchResults.push(result);
+      D.ok('FILE', `[${idx}/${total}] ${file.name} ✓`);
+    } catch (err) {
+      D.err('FILE', `[${idx}/${total}] ${file.name} ✗: ${err.message}`);
+      STATE.batchResults.push({
+        file: file,
+        formatInfo: { filename: file.name, fileSize: file.size, fileExt: (file.name.split('.').pop() || '').toLowerCase() },
+        analysis: {},
+        status: 'error',
+        error: err.message,
+      });
+    }
+    updateProgress(Math.round((idx / total) * 100));
+  }
+
+  showLoading(false);
+
+  // 显示第一个成功的结果, 或第一个结果
+  let firstOk = STATE.batchResults.find(r => r.status === 'ok');
+  if (!firstOk) firstOk = STATE.batchResults[0];
+  if (firstOk) {
+    loadBatchResult(0, firstOk);
+  }
+
+  // 显示批量列表和结果区
+  STATE.batchIndex = STATE.batchResults.findIndex(r => r.status === 'ok');
+  if (STATE.batchIndex < 0) STATE.batchIndex = 0;
+
+  dropZone.classList.add('compact');
+  dropZone.querySelector('h2').textContent = `⬆ 拖放新文件 | 已分析 ${STATE.batchResults.length} 个`;
+  renderBatchList();
+  $('#results').style.display = 'block';
+  if (firstOk) {
+    setStatus(`批量完成: ${STATE.batchResults.filter(r=>r.status==='ok').length}/${total} 成功`);
+  } else {
+    setStatus(`批量完成: 全部失败`, '', true);
+  }
+}
+
+async function processSingleFile(file) {
+  const errorLog = [];
+  // 读取原始字节
+  const rawBytes = new Uint8Array(await file.arrayBuffer());
+  D.info('READ', `${file.name}: ${rawBytes.byteLength} 字节`);
+
+  // 二进制格式检测
+  const binInfo = parseFormatFromBytes(rawBytes);
+  if (binInfo) {
+    D.ok('FMT', `${file.name}: ${binInfo.codec || '?'} / ${binInfo.container} ${binInfo.lossless ? '(无损)' : '(有损)'}`);
+  } else {
+    D.warn('FMT', `${file.name}: 二进制签名未识别`);
+  }
+
+  // 6 策略解码
+  let audioBuffer;
+  const ext = file.name.split('.').pop().toLowerCase();
+
+  // ①
+  try {
+    const decodeBuffer = rawBytes.buffer.slice(rawBytes.byteOffset, rawBytes.byteOffset + rawBytes.byteLength);
+    audioBuffer = await audioCtx.decodeAudioData(decodeBuffer);
+  } catch (e) { errorLog.push('①: ' + e.message); }
+
+  // ②
+  if (!audioBuffer) {
+    try {
+      const blob = new Blob([rawBytes.buffer], { type: file.type || 'audio/mp4' });
+      const url = URL.createObjectURL(blob);
+      audioBuffer = await audioCtx.decodeAudioData(await (await fetch(url)).arrayBuffer());
+      URL.revokeObjectURL(url);
+    } catch (e) { errorLog.push('②: ' + e.message); }
+  }
+
+  // ③
+  if (!audioBuffer) {
+    try { audioBuffer = await audioCtx.decodeAudioData(rawBytes.buffer.slice(0)); }
+    catch (e) { errorLog.push('③: ' + e.message); }
+  }
+
+  // ④
+  if (!audioBuffer) {
+    try { audioBuffer = await audioCtx.decodeAudioData(await file.arrayBuffer()); }
+    catch (e) { errorLog.push('④: ' + e.message); }
+  }
+
+  // ⑤ Audio Element
+  if (!audioBuffer) {
+    try {
+      await audioCtx.resume();
+      audioBuffer = await decodeViaAudioElement(file);
+    } catch (e) { errorLog.push('⑤: ' + e.message); }
+  }
+
+  // ⑦ WebCodecs — 内嵌 MP4 解析器 (0 网络, ACE/AAC 专用)
+  if (!audioBuffer && (ext === 'm4a' || ext === 'mp4' || ext === 'aac' || ext === 'alac')) {
+    D.info('DEC', '策略⑦ WebCodecs 内嵌解析器...');
+    try {
+      audioBuffer = await decodeWithWebCodecs(rawBytes);
+      D.ok('DEC', '⑦ WebCodecs 解码成功');
+    } catch (e) {
+      errorLog.push('⑦: ' + e.message);
+      D.err('DEC', '⑦ WebCodecs 失败: ' + e.message);
+    }
+  }
+
+  // ⑧ 纯 JS ALAC 解码器 — 零依赖, 离线可用
+  if (!audioBuffer && binInfo && binInfo.codec === 'ALAC' && (ext === 'm4a' || ext === 'mp4' || ext === 'alac')) {
+    D.info('DEC', '策略⑧ 纯 JS ALAC 解码器...');
+    try {
+      audioBuffer = await decodeALACWithPureJS(rawBytes);
+      D.ok('DEC', '⑧ ALAC 纯 JS 解码成功');
+    } catch (e) {
+      errorLog.push('⑧: ' + e.message);
+      D.err('DEC', '⑧ ALAC 解码失败: ' + e.message);
+    }
+  }
+
+  // ⑥ FFmpeg
+  if (!audioBuffer) {
+    D.info('DEC', '策略⑥ FFmpeg.wasm...');
+    const ffmpegDead = ffmpegFailed || (!ffmpegLoading && !ffmpegReady); // 已知失败或加载已完成但未成功
+    if (ffmpegDead) {
+      errorLog.push('⑥: FFmpeg 不可用' + (ffmpegFailed ? ' (CDN 不可达)' : ''));
+      D.warn('DEC', '⑥ 跳过: FFmpeg 不可用');
+    } else {
+      try {
+        showLoading(true, '等待 FFmpeg 引擎就绪...');
+        const startedAt = Date.now();
+        while (!ffmpegReady && (Date.now() - startedAt) < 60000) {
+          await sleep(800);
+        }
+        if (ffmpegReady) {
+          showLoading(true, 'FFmpeg 解码中...');
+          audioBuffer = await decodeWithFFmpeg(file, rawBytes);
+          D.ok('DEC', '⑥ FFmpeg 解码成功');
+        } else {
+          errorLog.push('⑥: FFmpeg 加载超时');
+        }
+      } catch (e) {
+        errorLog.push('⑥: ' + e.message);
+        D.err('DEC', '⑥ FFmpeg 失败: ' + e.message);
+      }
+    }
+  }
+
+  if (!audioBuffer) {
+    throw new Error('解码失败: ' + errorLog.slice(-3).join(' | '));
+  }
+
+  D.ok('DEC', `${file.name}: ${audioBuffer.numberOfChannels}ch ${(audioBuffer.sampleRate/1000).toFixed(1)}kHz ${audioBuffer.duration.toFixed(1)}s`);
+
+  // 格式信息
+  const formatInfo = {
+    filename: file.name,
+    fileSize: file.size,
+    fileExt: ext,
+    ...(binInfo || {}),
+    channels: audioBuffer.numberOfChannels,
+    sampleRate: audioBuffer.sampleRate,
+    duration: audioBuffer.duration,
+    actualBitrate: (file.size * 8) / audioBuffer.duration,
+  };
+
+  // 执行分析
+  const tempState = {
+    buffer: audioBuffer,
+    file: file,
+    rawBytes: rawBytes,
+    channels: audioBuffer.numberOfChannels,
+    sampleRate: audioBuffer.sampleRate,
+    duration: audioBuffer.duration,
+    formatInfo: formatInfo,
+    analysis: {},
+  };
+  const saved = { buffer: STATE.buffer, file: STATE.file, rawBytes: STATE.rawBytes, channels: STATE.channels, sampleRate: STATE.sampleRate, duration: STATE.duration, formatInfo: STATE.formatInfo, analysis: STATE.analysis };
+  Object.assign(STATE, tempState);
+  await runAnalysis();
+  const analysis = STATE.analysis;
+  Object.assign(STATE, saved);
+
+  return { file, formatInfo, analysis, status: 'ok' };
+}
+
+function loadBatchResult(index, result) {
+  STATE.batchIndex = index;
+  STATE.file = result.file;
+  STATE.formatInfo = result.formatInfo;
+  STATE.analysis = result.analysis;
+  STATE.sampleRate = result.formatInfo.sampleRate || 0;
+  STATE.duration = result.formatInfo.duration || 0;
+  STATE.channels = result.formatInfo.channels || 0;
+  STATE.buffer = null; // batch mode doesn't keep buffer
+
+  if (result.status === 'error') {
+    setStatus(`错误: ${result.error}`, '', true);
+    $('#results').innerHTML = `<div class="card"><div class="card-body" style="color:var(--re);text-align:center;padding:40px">❌ ${result.error}</div></div>`;
+    $('#section-overview').style.display = '';
+    return;
+  }
+
+  renderAll();
+  setStatus(`查看: ${result.file.name}`);
+  $('#topFileName').textContent = result.file.name;
+  $('#btnExport').style.display = '';
+  $$('.section').forEach(s => s.style.display = 'none');
+  const overview = $('#section-overview');
+  if (overview) overview.style.display = '';
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  批量文件列表
+// ═══════════════════════════════════════════════════════════════
+
+function renderBatchList() {
+  let container = $('#batchFileList');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'batchFileList';
+    container.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:0 0 12px 0;border-bottom:1px solid var(--border);margin-bottom:8px';
+    const results = $('#results');
+    results.insertBefore(container, results.firstChild);
+  }
+  container.innerHTML = '';
+  STATE.batchResults.forEach((r, i) => {
+    const btn = document.createElement('button');
+    btn.style.cssText = `padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:var(--bg1);color:var(--fg1);cursor:pointer;font-size:.75rem;white-space:nowrap;transition:.15s;max-width:200px;overflow:hidden;text-overflow:ellipsis`;
+    btn.textContent = (r.status === 'ok' ? '' : '❌ ') + r.file.name.replace(/\.[^.]+$/, '');
+    btn.title = r.file.name + (r.error ? '\n' + r.error : '');
+    if (i === STATE.batchIndex) {
+      btn.style.borderColor = 'var(--ac)';
+      btn.style.color = 'var(--ac)';
+      btn.style.fontWeight = '700';
+    }
+    btn.addEventListener('click', () => {
+      loadBatchResult(i, r);
+      renderBatchList();
+    });
+    container.appendChild(btn);
+  });
+}
+async function runAnalysis() {
+  const buf = STATE.buffer;
+  const sr = STATE.sampleRate;
+  const dur = STATE.duration;
+
+  // 取第一个声道数据用于大部分分析
+  const mono = new Float32Array(buf.length);
+  if (buf.numberOfChannels === 1) {
+    mono.set(buf.getChannelData(0));
+  } else {
+    const l = buf.getChannelData(0);
+    const r = buf.getChannelData(1);
+    for (let i = 0; i < buf.length; i++) mono[i] = (l[i] + r[i]) / 2;
+  }
+
+  STATE.analysis.mono = mono;
+  STATE.analysis.sampleRate = sr;
+  STATE.analysis.duration = dur;
+
+  // FFT 频谱
+  const { freqs, spectrum } = await computeSpectrumAsync(mono, sr);
+  STATE.analysis.freqs = freqs;
+  STATE.analysis.spectrum = spectrum;
+
+  // 频谱图
+  STATE.analysis.spectrogram = computeSpectrogram(mono, sr);
+
+  // 截止频率
+  STATE.analysis.cutoff = detectCutoff(freqs, spectrum, sr);
+
+  // 波形概览
+  STATE.analysis.waveform = downsampleForWaveform(mono, 2000);
+
+  // 动态范围
+  STATE.analysis.dynamics = computeDynamicRange(mono);
+
+  // EBU R128 响度 (ITU-R BS.1770-4 简化)
+  STATE.analysis.loudness = computeLoudness(mono, sr);
+
+  // 削波
+  STATE.analysis.clip = detectClipping(mono);
+
+  // 实测位深度
+  STATE.analysis.actualBitDepth = estimateBitDepth(mono);
+
+  // DC offset
+  STATE.analysis.dcOffset = detectDCOffset(mono);
+
+  // 立体声 / 相位
+  if (buf.numberOfChannels >= 2) {
+    STATE.analysis.stereo = computeStereoAnalysis(buf.getChannelData(0), buf.getChannelData(1));
+    STATE.analysis.phaseData = computePhaseScope(buf.getChannelData(0), buf.getChannelData(1));
+  } else {
+    STATE.analysis.stereo = null;
+  }
+
+  // 质量评估
+  STATE.analysis.quality = computeQuality();
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  分析函数
+// ═══════════════════════════════════════════════════════════════
+
+function downsampleForWaveform(data, targetLen) {
+  const step = Math.max(1, Math.floor(data.length / targetLen));
+  const result = new Float32Array(Math.ceil(data.length / step));
+  for (let i = 0, j = 0; i < data.length; i += step, j++) {
+    let peak = 0;
+    const end = Math.min(i + step, data.length);
+    for (let k = i; k < end; k++) {
+      const abs = Math.abs(data[k]);
+      if (abs > peak) peak = abs;
+    }
+    result[j] = peak;
+  }
+  return result;
+}
+
+function fftInPlace(real, imag, n) {
+  let j = 0;
+  for (let i = 0; i < n; i++) {
+    if (i < j) {
+      [real[i], real[j]] = [real[j], real[i]];
+      [imag[i], imag[j]] = [imag[j], imag[i]];
+    }
+    let m = n >> 1;
+    while (m > 0 && j >= m) { j -= m; m >>= 1; }
+    j += m;
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const half = len >> 1;
+    const angle = -2 * Math.PI / len;
+    const wR = Math.cos(angle), wI = Math.sin(angle);
+    for (let i = 0; i < n; i += len) {
+      let cR = 1, cI = 0;
+      for (let k = 0; k < half; k++) {
+        const a = i + k, b = i + k + half;
+        const tR = cR * real[b] - cI * imag[b];
+        const tI = cR * imag[b] + cI * real[b];
+        real[b] = real[a] - tR; imag[b] = imag[a] - tI;
+        real[a] += tR; imag[a] += tI;
+        const nR = cR * wR - cI * wI;
+        cI = cR * wI + cI * wR;
+        cR = nR;
+      }
+    }
+  }
+}
+
+// 异步 FFT（分块执行以保持 UI 响应）
+async function computeSpectrumAsync(data, sr) {
+  const fftSize = 65536;
+  const hop = fftSize;
+  const nSeg = Math.max(1, Math.floor(data.length / hop));
+  const half = fftSize / 2;
+  const sumSpec = new Float32Array(half);
+  const maxSeg = Math.min(nSeg, 120); // 限制段数以保持性能
+
+  for (let i = 0; i < maxSeg; i++) {
+    if (i % 10 === 0) await sleep(0); // yield to UI
+    const seg = data.slice(i * hop, i * hop + fftSize);
+    const real = new Float32Array(fftSize), imag = new Float32Array(fftSize);
+    for (let k = 0; k < seg.length; k++) {
+      real[k] = seg[k] * (0.5 - 0.5 * Math.cos(2 * Math.PI * k / (fftSize - 1)));
+    }
+    fftInPlace(real, imag, fftSize);
+    for (let k = 0; k < half; k++) {
+      sumSpec[k] += Math.sqrt(real[k] * real[k] + imag[k] * imag[k]);
+    }
+  }
+
+  for (let k = 0; k < half; k++) sumSpec[k] /= maxSeg;
+
+  const freqs = new Float32Array(half);
+  for (let k = 0; k < half; k++) freqs[k] = (k * sr) / fftSize;
+
+  let mx = 1e-12;
+  for (let i = 0; i < sumSpec.length; i++) if (sumSpec[i] > mx) mx = sumSpec[i];
+  const db = new Float32Array(half);
+  for (let k = 0; k < half; k++) db[k] = 20 * Math.log10(Math.max(sumSpec[k], 1e-12) / mx);
+
+  // 平滑
+  const smoothed = new Float32Array(half);
+  const win = Math.min(401, Math.floor(half / 5));
+  for (let i = 0; i < half; i++) {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, i - win); j <= Math.min(half - 1, i + win); j++) { s += db[j]; c++; }
+    smoothed[i] = s / c;
+  }
+  return { freqs, spectrum: smoothed };
+}
+
+function computeSpectrogram(data, sr) {
+  const fftSize = 2048;
+  const hopSize = fftSize / 2;
+  const half = fftSize / 2;
+  const numFrames = Math.floor((data.length - fftSize) / hopSize) + 1;
+  const maxFrames = 600;
+  const step = Math.max(1, Math.floor(numFrames / maxFrames));
+  const actualFrames = Math.floor((numFrames - 1) / step) + 1;
+  const spec = [];
+  const tAxis = new Float32Array(actualFrames);
+  for (let f = 0; f < actualFrames; f++) {
+    const start = f * step * hopSize;
+    tAxis[f] = start / sr;
+    const seg = data.slice(start, start + fftSize);
+    const real = new Float32Array(fftSize), imag = new Float32Array(fftSize);
+    for (let i = 0; i < seg.length; i++) {
+      real[i] = seg[i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (fftSize - 1)));
+    }
+    fftInPlace(real, imag, fftSize);
+    const row = new Float32Array(half);
+    for (let k = 0; k < half; k++) row[k] = Math.sqrt(real[k] * real[k] + imag[k] * imag[k]);
+    spec.push(row);
+  }
+  const fAxis = new Float32Array(half);
+  for (let k = 0; k < half; k++) fAxis[k] = (k * sr) / fftSize;
+  return { fAxis, tAxis, data: spec };
+}
+
+function detectCutoff(freqs, spectrum, sr) {
+  // 更精确的截止频率检测: 滑动窗口方差分析
+  const nyquist = sr / 2;
+  let si = 0;
+  for (let i = 0; i < freqs.length; i++) { if (freqs[i] > 6000) { si = i; break; } }
+  if (si >= freqs.length) return { freq: nyquist, bw: 100, confidence: 'low' };
+
+  // 在 6kHz+ 区域找最大值，然后在之后找首次持续低于阈值 -35dB 的位置
+  let maxVal = -Infinity, maxIdx = si;
+  for (let i = si; i < spectrum.length; i++) {
+    if (spectrum[i] > maxVal) { maxVal = spectrum[i]; maxIdx = i; }
+  }
+
+  // 从最高点之后开始找截止点: 需要连续多个点低于阈值
+  const threshold = maxVal - 35;
+  let cutoffIdx = spectrum.length - 1;
+  let consecutiveBelow = 0;
+  const requiredConsecutive = 8; // 需要连续 8 点低于阈值
+
+  for (let i = maxIdx + 5; i < spectrum.length; i++) {
+    if (spectrum[i] < threshold) {
+      consecutiveBelow++;
+      if (consecutiveBelow >= requiredConsecutive) {
+        cutoffIdx = i - requiredConsecutive + 1;
+        break;
+      }
+    } else {
+      consecutiveBelow = 0;
+    }
+  }
+
+  const cutoffFreq = freqs[Math.min(cutoffIdx, freqs.length - 1)];
+  const bw = (cutoffFreq / nyquist) * 100;
+
+  // 置信度评估
+  let confidence = 'high';
+  if (bw > 95) confidence = 'high'; // 未检测到截止 — 可能是真高清
+  else if (Math.abs(cutoffFreq - 22050) < 500) confidence = 'high'; // 完美 CD 截止
+  else if (Math.abs(cutoffFreq - 16000) < 1000) confidence = 'high'; // 典型有损截止
+  else confidence = 'medium';
+
+  return { freq: cutoffFreq, bw, confidence };
+}
+
+function computeDynamicRange(data) {
+  let peak = 0, sumSq = 0;
+  for (let i = 0; i < data.length; i++) {
+    const a = Math.abs(data[i]); if (a > peak) peak = a;
+    sumSq += data[i] * data[i];
+  }
+  const rms = Math.sqrt(sumSq / data.length);
+  return {
+    peakDB: peak > 0 ? 20 * Math.log10(peak) : -120,
+    rmsDB: rms > 0 ? 20 * Math.log10(rms) : -120,
+    crest: (peak > 0 && rms > 0) ? 20 * Math.log10(peak / rms) : 0,
+  };
+}
+
+function computeLoudness(data, sr) {
+  // ITU-R BS.1770-4: K-weighting filter + gated loudness
+  // 使用标准 48kHz 系数; 非 48kHz 时先重采样后再滤波 (近似)
+
+  // K-weighting IIR 滤波器系数 (fs=48000, from BS.1770-4 Table 1 & 2)
+  const hp_b = [1.0, -2.0, 1.0];
+  const hp_a = [1.0, -1.99004745483398, 0.99007225036621];
+  const hs_b = [1.53512485958697, -2.69169618940638, 1.19839281085285];
+  const hs_a = [1.0, -1.69065929318241, 0.73248077421585];
+
+  // 应用双二阶 IIR 滤波器
+  function biquad(samples, b, a) {
+    const out = new Float32Array(samples.length);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < samples.length; i++) {
+      const x0 = samples[i];
+      const y0 = b[0] * x0 + b[1] * x1 + b[2] * x2 - a[1] * y1 - a[2] * y2;
+      out[i] = Math.max(-10, Math.min(10, y0)); // 限幅防止不稳定
+      x2 = x1; x1 = x0;
+      y2 = y1; y1 = y0;
+    }
+    return out;
+  }
+
+  // 级联滤波: HP -> HS
+  const afterHP = biquad(data, hp_b, hp_a);
+  const kWeighted = biquad(afterHP, hs_b, hs_a);
+
+  // 400ms 窗口, 75% overlap → hop = 100ms
+  const blockLen = Math.round(0.4 * sr);
+  const hop = Math.round(0.1 * sr);
+  const numBlocks = Math.floor((kWeighted.length - blockLen) / hop) + 1;
+  const blockMS = [];
+
+  for (let i = 0; i < numBlocks; i++) {
+    const start = i * hop;
+    let sumSq = 0;
+    for (let j = start; j < start + blockLen; j++) {
+      sumSq += kWeighted[j] * kWeighted[j];
+    }
+    blockMS.push(sumSq / blockLen);
+  }
+
+  if (blockMS.length === 0) {
+    // 文件太短: 对整个文件计算
+    let sumSq = 0;
+    for (let i = 0; i < kWeighted.length; i++) sumSq += kWeighted[i] * kWeighted[i];
+    const ms = sumSq / kWeighted.length;
+    const lufs = -0.691 + 10 * Math.log10(Math.max(ms, 1e-16));
+    return { integratedLoudnessLUFS: lufs, isEstimate: false, shortTermMaxLUFS: lufs, lra: 0 };
+  }
+
+  // 绝对门限: 丢弃低于 -70 LUFS 的块
+  const absGateLUFS = -70;
+  const absGateMS = Math.pow(10, (absGateLUFS + 0.691) / 10);
+  const gatedAbs = blockMS.filter(ms => ms > absGateMS);
+
+  if (gatedAbs.length === 0) {
+    const lufs = -70;
+    return { integratedLoudnessLUFS: lufs, isEstimate: false, shortTermMaxLUFS: lufs, lra: 0 };
+  }
+
+  const absMeanMS = gatedAbs.reduce((s, v) => s + v, 0) / gatedAbs.length;
+  const absLUFS = -0.691 + 10 * Math.log10(Math.max(absMeanMS, 1e-16));
+
+  // 相对门限: 低于 (absLUFS - 10) 的块丢弃
+  const relGateLUFS = absLUFS - 10;
+  const relGateMS = Math.pow(10, (relGateLUFS + 0.691) / 10);
+  const gatedRel = gatedAbs.filter(ms => ms > relGateMS);
+
+  let integratedLUFS;
+  if (gatedRel.length === 0) {
+    integratedLUFS = absLUFS;
+  } else {
+    const relMeanMS = gatedRel.reduce((s, v) => s + v, 0) / gatedRel.length;
+    integratedLUFS = -0.691 + 10 * Math.log10(Math.max(relMeanMS, 1e-16));
+  }
+
+  // 短时 LUFS (3s 窗口) 最大值
+  const stBlockLen = Math.round(3.0 * sr);
+  const stHop = Math.round(0.1 * sr);
+  const stNumBlocks = Math.floor((kWeighted.length - stBlockLen) / stHop) + 1;
+  let stMaxLUFS = -Infinity;
+  const stLUFSvalues = [];
+  for (let i = 0; i < stNumBlocks; i++) {
+    const start = i * stHop;
+    let sumSq = 0;
+    for (let j = start; j < start + stBlockLen; j++) sumSq += kWeighted[j] * kWeighted[j];
+    const ms = sumSq / stBlockLen;
+    const stL = -0.691 + 10 * Math.log10(Math.max(ms, 1e-16));
+    stLUFSvalues.push(stL);
+    if (stL > stMaxLUFS) stMaxLUFS = stL;
+  }
+
+  // LRA (Loudness Range) per EBU Tech 3341
+  let lra = 0;
+  if (stLUFSvalues.length > 10) {
+    // 绝对门限 -70
+    const stGated = stLUFSvalues.filter(v => v > -70);
+    if (stGated.length > 5) {
+      // 相对门限 = mean(stGated) - 20
+      const stMean = stGated.reduce((s,v)=>s+v,0) / stGated.length;
+      const stRelGate = stMean - 20;
+      const stFinal = stGated.filter(v => v > stRelGate);
+      if (stFinal.length > 2) {
+        const sorted = [...stFinal].sort((a,b)=>a-b);
+        const p10 = sorted[Math.floor(sorted.length * 0.1)];
+        const p95 = sorted[Math.floor(sorted.length * 0.95)];
+        lra = p95 - p10;
+      }
+    }
+  }
+
+  return {
+    integratedLoudnessLUFS: integratedLUFS,
+    isEstimate: false,
+    shortTermMaxLUFS: stMaxLUFS > -Infinity ? stMaxLUFS : integratedLUFS,
+    lra: Math.max(0, Math.min(lra, 30)),
+  };
+}
+
+function detectClipping(data) {
+  let clipped = 0, peak = 0, maxConsecClip = 0, curClip = 0;
+  for (let i = 0; i < data.length; i++) {
+    const a = Math.abs(data[i]);
+    if (a > peak) peak = a;
+    if (a > 0.999) { clipped++; curClip++; if (curClip > maxConsecClip) maxConsecClip = curClip; }
+    else curClip = 0;
+  }
+
+  // True Peak: 4x 过采样 + Catmull-Rom 三次插值 (ITU-R BS.1770-4 Annex 2)
+  let truePeak = peak;
+  const n = data.length;
+  const factor = 4;
+  for (let i = 1; i < n - 2; i++) {
+    const y0 = data[i - 1], y1 = data[i], y2 = data[i + 1], y3 = data[i + 2];
+    for (let j = 1; j < factor; j++) {
+      const t = j / factor;
+      // Catmull-Rom cubic interpolation
+      const a = -0.5 * y0 + 1.5 * y1 - 1.5 * y2 + 0.5 * y3;
+      const b = y0 - 2.5 * y1 + 2 * y2 - 0.5 * y3;
+      const c = -0.5 * y0 + 0.5 * y2;
+      const d = y1;
+      const val = ((a * t + b) * t + c) * t + d;
+      const absVal = Math.abs(val);
+      if (absVal > truePeak) truePeak = absVal;
+    }
+  }
+
+  const samplePeakDB = peak > 0 ? 20 * Math.log10(peak) : -120;
+  const truePeakDB = truePeak > 0 ? 20 * Math.log10(truePeak) : -120;
+  const overload = truePeak > 1.0; // 采样间过载（比削波更隐蔽）
+
+  return {
+    hasClipping: peak >= 0.9999,
+    hasTruePeakOver: truePeak > 1.0,
+    clippedSamples: clipped,
+    clippedPct: (clipped / data.length) * 100,
+    peakDB: samplePeakDB,
+    truePeakDB: truePeak > 1.0 ? truePeakDB.toFixed(2) + ' (过载!)' : truePeakDB.toFixed(2),
+    truePeakLinear: truePeak,
+    maxConsecutiveClip: maxConsecClip,
+    overload: overload,
+  };
+}
+
+function estimateBitDepth(data) {
+  // 精确位深度检测: 量化步长直方图分析
+  // 将浮点采样值映射到不同位深度的整数量化空间，检测最小有效步长
+  const numSamples = Math.min(data.length, 200000);
+  const step = Math.max(1, Math.floor(data.length / numSamples));
+
+  // 测试多个位深度标尺: 8, 16, 20, 24, 32
+  const testBits = [8, 16, 18, 20, 22, 24, 32];
+  const scores = [];
+
+  for (const bits of testBits) {
+    const scale = (1 << (bits - 1)) - 1;
+    const hist = new Map();
+    for (let i = 0; i < data.length; i += step) {
+      const q = Math.round(data[i] * scale);
+      hist.set(q, (hist.get(q) || 0) + 1);
+    }
+    const vals = [...hist.keys()].filter(v => v !== 0).sort((a,b)=>a-b);
+    if (vals.length < 2) { scores.push({bits, score: Infinity, uniqueVals: vals.length}); continue; }
+
+    // 找最大公约数步长
+    let gcd = Math.abs(vals[1] - vals[0]);
+    for (let i = 2; i < Math.min(vals.length, 500); i++) {
+      const d = Math.abs(vals[i] - vals[i-1]);
+      if (d > 0) gcd = gcdPair(gcd, d);
+    }
+    // 如果 GCD ≈ 1，说明该位深度匹配
+    const penalty = Math.abs(gcd - 1) * scale; // 量化误差
+    scores.push({bits, score: penalty, gcd, uniqueVals: vals.length});
+  }
+
+  // 找最佳匹配: score 最小且 uniqueVals 合理
+  scores.sort((a,b) => a.score - b.score);
+  const best = scores[0];
+  let estimated = best.bits;
+  let note = '';
+
+  if (best.gcd <= 2 && estimated >= 20) note = '疑似母带 24-bit';
+  else if (best.gcd <= 2 && estimated === 16) note = '标准 16-bit';
+  else if (estimated >= 20) note = '疑似 padded 24-bit (源为 16-bit)';
+  else note = '标准 16-bit';
+
+  // 二次确认: 统计独特量化值数量
+  if (best.uniqueVals < 500 && estimated > 16) {
+    estimated = 16;
+    note = '少量独特值 — 实际为 16-bit';
+  }
+
+  return {
+    estimated: Math.max(8, Math.min(estimated, 32)),
+    note,
+    detail: `GCD=${best.gcd}, unique=${best.uniqueVals}`
+  };
+}
+
+function gcdPair(a, b) { while(b) { [a,b]=[b,a%b]; } return a; }
+
+function detectDCOffset(data) {
+  // 计算均值作为 DC offset
+  let sum = 0;
+  for (let i = 0; i < data.length; i++) sum += data[i];
+  const mean = sum / data.length;
+  const dcDB = 20 * Math.log10(Math.abs(mean) + 1e-16);
+  const isSignificant = Math.abs(mean) > 0.001;
+  return { offset: mean, dcDB, isSignificant };
+}
+
+function computeStereoAnalysis(left, right) {
+  const n = Math.min(left.length, right.length);
+  let sL = 0, sR = 0, sLL = 0, sRR = 0, sLR = 0, phaseInv = 0;
+  for (let i = 0; i < n; i++) {
+    const l = left[i], r = right[i];
+    sL += l; sR += r;
+    sLL += l * l; sRR += r * r; sLR += l * r;
+    if (l * r < 0) phaseInv++;
+  }
+  const mL = sL / n, mR = sR / n;
+  const vL = sLL / n - mL * mL, vR = sRR / n - mR * mR;
+  const cov = sLR / n - mL * mR;
+  const corr = (vL > 0 && vR > 0) ? cov / Math.sqrt(vL * vR) : 1;
+  // Mid/Side balance
+  let midRms = 0, sideRms = 0;
+  for (let i = 0; i < n; i++) {
+    const mid = (left[i] + right[i]) / 2;
+    const side = (left[i] - right[i]) / 2;
+    midRms += mid * mid; sideRms += side * side;
+  }
+  midRms = Math.sqrt(midRms / n);
+  sideRms = Math.sqrt(sideRms / n);
+  const width = (sideRms > 0 && midRms > 0) ? (sideRms / (midRms + sideRms)) * 200 : 0;
+
+  return {
+    correlation: corr,
+    isOutOfPhase: corr < -0.1,
+    phaseInversionPct: (phaseInv / n) * 100,
+    midSideRatio: midRms > 0 ? 20 * Math.log10(Math.max(sideRms, 1e-12) / midRms) : -Infinity,
+    stereoWidth: width, // 0-100 scale
+  };
+}
+
+function computePhaseScope(left, right) {
+  const n = Math.min(left.length, right.length);
+  const step = Math.max(1, Math.floor(n / 1500));
+  const points = [];
+  for (let i = 0; i < n; i += step) {
+    points.push({ x: left[i], y: right[i] });
+  }
+  return points;
+}
+
+function computeQuality() {
+  const A = STATE.analysis;
+  const F = STATE.formatInfo;
+  const sr = F.sampleRate;
+  let items = [];
+
+  // 格式
+  items.push(F.lossless ? ['格式','pass',`${F.codec || 'PCM'} — 无损`] : ['格式','hint',`${F.codec || '?'} — 有损`]);
+
+  // 采样率
+  if (sr >= 176400) items.push(['采样率','warn',`${(sr/1000).toFixed(1)} kHz — DSD级采样率`]);
+  else if (sr >= 96000) items.push(['采样率','hint',`${(sr/1000).toFixed(1)} kHz — 高解析度`]);
+  else if (sr >= 44100) items.push(['采样率','pass',`${(sr/1000).toFixed(1)} kHz`]);
+  else items.push(['采样率','warn',`${(sr/1000).toFixed(1)} kHz — 低于 CD`]);
+
+  // 位深度
+  const bd = A.actualBitDepth.estimated;
+  if (bd >= 24) items.push(['位深度','pass',`实测 ${bd}-bit — ${A.actualBitDepth.note}`]);
+  else if (bd >= 20) items.push(['位深度','hint',`实测 ${bd}-bit — ${A.actualBitDepth.note}`]);
+  else if (bd >= 16) items.push(['位深度','pass',`实测 ${bd}-bit`]);
+  else items.push(['位深度','warn',`实测 ${bd}-bit — 低精度`]);
+
+  // 过采样
+  const bw = A.cutoff.bw;
+  const cf = A.cutoff.freq;
+  const conf = A.cutoff.confidence;
+  if (bw < 80 && sr > 48000 && conf === 'high') items.push(['过采样','fail',`${(cf/1000).toFixed(1)}kHz cutoff → BW ${bw.toFixed(0)}%`]);
+  else if (bw >= 98) items.push(['过采样','pass',`未检测到过采样 — BW ${bw.toFixed(0)}%`]);
+  else items.push(['过采样','hint',`${(cf/1000).toFixed(1)}kHz cutoff, BW ${bw.toFixed(0)}%`]);
+
+  // True Peak 过载
+  if (A.clip.hasTruePeakOver) items.push(['TP过载','fail',`True Peak 超过 0 dBFS — 采样间过载!`]);
+
+  // ── 商业母带检测 ──
+  // 无损 + 有削波 + 动态压缩 + 偏响 → 几乎肯定是商业发行CD/流媒体，
+  // 这些"问题"是母带工程师刻意为之，非文件损坏
+  const crest = A.dynamics.crest;
+  const lufs = A.loudness.integratedLoudnessLUFS;
+  const isCommercialMaster = F.lossless && A.clip.hasClipping && crest < 10 && lufs > -14;
+  A.isCommercialMaster = isCommercialMaster;
+
+  // 削波
+  if (A.clip.hasClipping) {
+    if (isCommercialMaster) {
+      items.push(['削波','hint',`${A.clip.clippedSamples} 点削波 (${A.clip.clippedPct.toFixed(3)}%) — 商业母带常见`]);
+    } else {
+      items.push(['削波','fail',`${A.clip.clippedSamples} 点削波 (${A.clip.clippedPct.toFixed(3)}%)`]);
+    }
+  } else if (A.clip.peakDB > -0.3) {
+    items.push(['削波','hint',`Sample peak ${A.clip.peakDB.toFixed(2)} dBFS — 极近上限`]);
+  } else {
+    items.push(['削波','pass',`Sample peak ${A.clip.peakDB.toFixed(2)} dBFS`]);
+  }
+
+  // 动态
+  if (crest >= 14) items.push(['动态','pass',`Crest ${crest.toFixed(1)} dB — 优秀`]);
+  else if (crest >= 10) items.push(['动态','pass',`Crest ${crest.toFixed(1)} dB — 良好`]);
+  else if (crest >= 8) items.push(['动态','hint',`Crest ${crest.toFixed(1)} dB — 适度压缩`]);
+  else if (isCommercialMaster) {
+    items.push(['动态','hint',`Crest ${crest.toFixed(1)} dB — 商业母带压缩（非缺陷）`]);
+  } else {
+    items.push(['动态','fail',`Crest ${crest.toFixed(1)} dB — 过度压缩`]);
+  }
+
+  // 响度 (ITU-R BS.1770-4)
+  const lra = A.loudness.lra;
+  if (lufs > -14) items.push(['响度','hint',`${lufs.toFixed(1)} LUFS — 偏响 (流行乐典型)`]);
+  else if (lufs > -23) items.push(['响度','pass',`${lufs.toFixed(1)} LUFS`]);
+  else items.push(['响度','hint',`${lufs.toFixed(1)} LUFS — 偏安静 (古典电影)`]);
+  if (lra > 15) items.push(['LRA','hint',`${lra.toFixed(1)} LU — 宽广 (古典/电影)`]);
+  else if (lra > 8) items.push(['LRA','pass',`${lra.toFixed(1)} LU`]);
+  else if (lra > 0) items.push(['LRA','pass',`${lra.toFixed(1)} LU — 窄 (流行乐典型)`]);
+
+  // DC Offset
+  if (A.dcOffset.isSignificant) items.push(['DC Offset','warn',`${(A.dcOffset.offset*100).toFixed(3)}% — 检测到直流偏移`]);
+
+  // 立体声
+  if (A.stereo) {
+    if (A.stereo.isOutOfPhase) items.push(['立体声','fail',`反相 (r=${A.stereo.correlation.toFixed(3)}) — 单声道兼容问题`]);
+    else if (A.stereo.stereoWidth > 80) items.push(['立体声','pass',`宽度 ${A.stereo.stereoWidth.toFixed(0)}% — 宽广`]);
+    else if (A.stereo.correlation > 0.95) items.push(['立体声','hint',`接近单声道 (r=${A.stereo.correlation.toFixed(3)})`]);
+    else items.push(['立体声','pass',`正常 (r=${A.stereo.correlation.toFixed(3)})`]);
+  } else {
+    items.push(['立体声','pass','单声道']);
+  }
+
+  return items;
+}
+
+// ═══════════════════════════════════════
+//  智能解读 - 基于数据的个性化诊断
+// ═══════════════════════════════════════
+function generateNarrative() {
+  const A = STATE.analysis;
+  const F = STATE.formatInfo;
+  const lines = [];
+
+  // ── 基本信息 ──
+  const formatDesc = F.lossless
+    ? `这是一份<span class="good">${F.codec || '无损'}</span>格式音频，数据完整保留，无压缩损失。`
+    : `这是一份<span class="warn">${F.codec || '有损'}</span>格式音频，编码过程会丢弃部分听感不明显的信号。`;
+
+  const srDesc = F.sampleRate >= 96000
+    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，属于高解析度级别${F.sampleRate >= 176400 ? '，接近 DSD 品质。体积较大，适合录音室存档或严肃聆听；普通回放场景下与 44.1kHz 听感差异极小' : '。相比 CD 品质有更高的理论频率上限，但普通人耳难以分辨差异'}。`
+    : F.sampleRate >= 44100
+    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，达到 CD 标准，人耳可闻频率范围（~20kHz）完全覆盖。`
+    : `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b><span class="warn">低于 CD 标准</span>，高频可能缺失。`;
+
+  lines.push(formatDesc + srDesc);
+
+  const bdNote = A.actualBitDepth.estimated >= 20
+    ? `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>（${A.actualBitDepth.note}），动态余量充足。`
+    : `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>，${A.actualBitDepth.estimated < 16 ? '<span class="warn">精度偏低，动态范围受限</span>' : '为 CD 标准精度'}。`;
+
+  lines.push(bdNote);
+
+  // ── 过采样检测 ──
+  const bw = A.cutoff.bw;
+  const cf = A.cutoff.freq;
+  if (bw < 80 && F.sampleRate > 48000 && A.cutoff.confidence === 'high') {
+    lines.push(`<span class="bad">⚠ 频谱截止频率 ${(cf/1000).toFixed(1)}kHz，带宽比仅 ${bw.toFixed(0)}%，高概率是从低采样率源升频（Upsampling）而来，并非原生 ${(F.sampleRate/1000).toFixed(0)}kHz 录音。</span>`);
+  }
+
+  // ── 响度与动态 ──
+  const lufs = A.loudness.integratedLoudnessLUFS;
+  const crest = A.dynamics.crest;
+  const lra = A.loudness.lra;
+
+  let dynSummary = '';
+  if (crest >= 14) {
+    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态范围优秀。`;
+  } else if (crest >= 10) {
+    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态良好，有自然的强弱对比。`;
+  } else if (crest >= 8) {
+    dynSummary = `Crest Factor <span class="warn">${crest.toFixed(1)}dB</span>，存在适度压缩，属于现代流行乐的常见处理。吉他和人声之间的响度差异被缩小，听感上"更响更饱满"，但牺牲了部分动态层次。`;
+  } else {
+    dynSummary = `Crest Factor <span class="bad">${crest.toFixed(1)}dB</span>，动态被严重压缩。音乐几乎没有强弱变化，"响度战争"特征明显。长时间聆听容易产生听觉疲劳。`;
+  }
+
+  if (lra > 12) {
+    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，表明段落之间强弱落差较大，音乐有起伏感。`;
+  } else if (lra > 6) {
+    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，段落间响度差异适中。`;
+  } else {
+    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，整曲响度非常均匀。`;
+  }
+  lines.push(dynSummary);
+
+  // ── LUFS ──
+  let lufsLine = `综合响度 <b>${lufs.toFixed(1)} LUFS</b>`;
+  if (lufs > -8) {
+    lufsLine += `<span class="bad"> — 极度响亮，几乎肯定存在削波和失真。</span>`;
+  } else if (lufs > -12) {
+    lufsLine += `<span class="warn"> — 偏响，但在 Spotify（-14 LUFS）/ Apple Music（-16 LUFS）/ YouTube（-14 LUFS）等流媒体平台上会被自动降低音量（Loudness Normalization），实际听感不会更响，反而因压缩损失了动态。</span>`;
+  } else if (lufs > -18) {
+    lufsLine += `<span class="good"> — 符合主流流媒体响度推荐范围。</span>`;
+  } else if (lufs > -24) {
+    lufsLine += `<span class="good"> — 偏安静，适合广播标准（EBU R128：-23 LUFS）。</span>`;
+  } else {
+    lufsLine += ` — 非常安静，可能需要增加增益才能在普通设备上正常聆听。`;
+  }
+  lines.push(lufsLine);
+
+  // ── 削波 ──
+  if (A.clip.hasClipping) {
+    if (A.isCommercialMaster) {
+      lines.push(`<span class="hint">ℹ 检测到 <b>${A.clip.clippedSamples}</b> 个采样点削波（占比 ${A.clip.clippedPct.toFixed(3)}%），但这属于商业母带的正常现象。现代流行/R&B/Hip-Hop 的母带工程师会故意将响度推到上限，产生少量削波以换取更大的感知响度。在 Apple Music 的 ALAC 和 Spotify 的 AAC 中这种处理极为普遍。这不代表文件损坏。</span>`);
+    } else {
+      lines.push(`<span class="bad">⚠ 检测到 <b>${A.clip.clippedSamples}</b> 个采样点削波（占比 ${A.clip.clippedPct.toFixed(3)}%），最大连续削波 ${A.clip.maxConsecutiveClip} 点。削波导致波形顶部被"切平"，产生可闻失真（尤其在高频打击乐器上）。这通常是由于母带处理时将响度推到极限所致。</span>`);
+    }
+    if (A.clip.hasTruePeakOver) {
+      lines.push(`<span class="bad">⚠ True Peak 过载 — 即使采样点未削波，D/A 转换时模拟重建信号仍可能超出 0 dBFS。这意味着在手机、蓝牙音箱等实际播放设备上失真可能比数据显示的更严重。</span>`);
+    }
+  } else if (A.clip.peakDB > -0.3) {
+    lines.push(`峰值电平 ${A.clip.peakDB.toFixed(2)}dBFS，<span class="warn">非常接近上限</span>，余量极低。播放设备稍有增益就可能削波。`);
+  }
+
+  // ── DC Offset ──
+  if (A.dcOffset.isSignificant) {
+    lines.push(`<span class="bad">⚠ 检测到直流偏移 ${(A.dcOffset.offset*100).toFixed(3)}%。这通常是录音设备硬件问题的迹象，会浪费有效动态范围并可能导致后续处理产生削波。</span>`);
+  }
+
+  // ── 立体声 ──
+  if (A.stereo) {
+    const s = A.stereo;
+    if (s.isOutOfPhase) {
+      lines.push(`<span class="bad">⚠ 立体声反相问题：左右声道相关性系数 ${s.correlation.toFixed(3)}，反相比例 ${s.phaseInversionPct.toFixed(2)}%。在单声道设备（如手机扬声器、蓝牙音箱单声道模式）上播放时，左右声道会相互抵消，导致声音空洞或完全消失。</span>`);
+    } else if (s.correlation > 0.95) {
+      lines.push(`立体声宽度 ${s.stereoWidth.toFixed(0)}%，<span class="warn">接近单声道</span>，左右声道几乎一致。声场偏窄，缺乏空间感。`);
+    } else {
+      const wDesc = s.stereoWidth > 70 ? '声场宽广，左右声道信息丰富' : '声场自然';
+      lines.push(`立体声宽度 ${s.stereoWidth.toFixed(0)}%，${wDesc}，Mid/Side 比值 ${s.midSideRatio.toFixed(1)}dB。`);
+    }
+  } else {
+    lines.push(`此文件为单声道录音。`);
+  }
+
+  // ── 总结 ──
+  // ★ 根因推断
+  const diagnostics = diagnoseRootCause();
+  if (diagnostics.length > 0) {
+    lines.push(`<div style="margin-top:14px;padding:10px 14px;background:#0a1925;border-radius:6px;border-left:3px solid var(--ac)"><b style="color:var(--ac);font-size:.82rem">🔍 根因推断</b></div>`);
+    for (const d of diagnostics) {
+      const sevColor = d.severity === 'good' ? 'var(--gr)' : d.severity === 'bad' ? 'var(--re)' : d.severity === 'warn' ? 'var(--ye)' : 'var(--ac)';
+      lines.push(`<p style="margin:6px 0;line-height:1.7"><span style="color:${sevColor};font-weight:600">${d.title}</span><br><span style="font-size:.78rem;color:var(--fg2)">${d.detail}</span></p>`);
+    }
+  }
+
+  const filteredQ = STATE.analysis.quality.filter(([d]) => !['格式','位深度','响度','LRA','TP过载','DC Offset'].includes(d));
+  const failCount = filteredQ.filter(([,r]) => r === 'fail').length;
+  const warnCount = filteredQ.filter(([,r]) => r === 'warn').length;
+
+  let verdict = '';
+  if (A.isCommercialMaster) {
+    verdict = `<span class="good">✅ 综合评估：检测到商业母带特征（削波 + 压缩 + 高响度），这是 Apple Music / Spotify / CD 发行的标准母带处理方式，<b>并非文件缺陷</b>。此音频文件质量正常，可以放心使用。</span>`;
+  } else if (failCount === 0 && warnCount === 0) {
+    verdict = `<span class="good">✅ 综合评估：此音频文件质量优秀，无明显问题。各项指标均符合专业标准。</span>`;
+  } else if (failCount === 0) {
+    verdict = `<span class="good">✅ 综合评估：此音频文件整体良好。有 ${warnCount} 项提示性信息，但不影响正常使用。</span>`;
+  } else if (failCount <= 2 && !A.clip.hasClipping) {
+    verdict = `<span class="warn">⚠ 综合评估：检测到 ${failCount} 项缺陷，建议了解原因。如果用于发布或存档，建议检查原始录音或母带。</span>`;
+  } else {
+    verdict = `<span class="bad">❌ 综合评估：存在较多问题（${failCount} 项失败）。如果这是从 CD/流媒体提取的文件，这些"问题"可能是母带风格所致（如响度战争），属于正常现象。如果是你自行录制的文件，建议检查录音链路。</span>`;
+  }
+  lines.push(verdict);
+
+  return lines.map(l => `<p style="margin:6px 0;line-height:1.8">${l}</p>`).join('');
+}
+
+// ── 频谱智能解读 ──
+function narrateSpectrum() {
+  const A = STATE.analysis;
+  const { freqs, spectrum } = A;
+  const sr = A.sampleRate;
+  const lines = [], half = freqs.length;
+  if (!half) return '';
+
+  // 分频段能量
+  let loEnergy = 0, midEnergy = 0, hiEnergy = 0, ultraEnergy = 0;
+  let loCount = 0, midCount = 0, hiCount = 0, ultraCount = 0;
+  let peakFreq = 0, peakDB = -200;
+  for (let i = 0; i < half; i++) {
+    const f = freqs[i], db = spectrum[i];
+    if (f <= 250) { loEnergy += db; loCount++; }
+    else if (f <= 2000) { midEnergy += db; midCount++; }
+    else if (f <= 8000) { hiEnergy += db; hiCount++; }
+    else { ultraEnergy += db; ultraCount++; }
+    if (db > peakDB) { peakDB = db; peakFreq = f; }
+  }
+  loEnergy /= loCount; midEnergy /= midCount; hiEnergy /= hiCount; ultraEnergy /= ultraCount;
+
+  // 最大能量频率
+  lines.push(`能量峰值位于 <b>${peakFreq < 1000 ? peakFreq.toFixed(0) + 'Hz' : (peakFreq/1000).toFixed(1) + 'kHz'}</b>（${peakDB.toFixed(1)}dB）${peakFreq < 150 ? '— 极低频区域，表明重低音突出' : peakFreq < 500 ? '— 低音乐器/鼓组区域' : peakFreq < 3000 ? '— 中频区域，人声和主要乐器所在' : '— 高频区域'}。`);
+
+  // 频谱平衡
+  const balance = loEnergy - midEnergy;
+  if (balance > 12) lines.push(`<span class="warn">低频明显突出（比中频高 ${balance.toFixed(1)}dB），低音偏重。适合电子/嘻哈，但可能在人声为主的音乐中显得闷。</span>`);
+  else if (balance > 5) lines.push(`低频略突出（+${balance.toFixed(1)}dB vs 中频），低音温暖饱满。`);
+  else if (balance < -8) lines.push(`<span class="warn">低频偏薄（${balance.toFixed(1)}dB vs 中频），可能缺乏重量感。</span>`);
+  else lines.push(`低频与中频均衡（${balance.toFixed(1)}dB 差异）。`);
+
+  const hiBalance = hiEnergy - ultraEnergy;
+  if (hiBalance > 15) lines.push(`高频（8-16kHz）丰富，细节清晰，但<span class="warn">长时间聆听可能产生疲劳</span>。`);
+  else if (hiBalance < -5) lines.push(`<span class="hint">极高频（16kHz+）相对突出，但此范围已超出大部分人耳感知。</span>`);
+  else lines.push(`高频段自然衰减，听感舒适。`);
+
+  // 截止频率解读
+  const cf = A.cutoff;
+  if (cf.bw < 80 && sr > 48000 && cf.confidence === 'high') {
+    lines.push(`<span class="bad">⚠ 频谱在 ${(cf.freq/1000).toFixed(1)}kHz 处明显截断（带宽比 ${cf.bw.toFixed(0)}%），这与 ${(sr/1000).toFixed(0)}kHz 采样率不匹配，大概率是从低采样率源升频而来。</span>`);
+  } else if (cf.freq < sr * 0.4 && cf.bw < 90) {
+    lines.push(`<span class="hint">频谱在 ${(cf.freq/1000).toFixed(1)}kHz 附近能量衰减（BW ${cf.bw.toFixed(0)}%），可能是母带或编码器对高频做了低通滤波。</span>`);
+  } else {
+    lines.push(`频谱延伸至 ${(cf.freq/1000).toFixed(1)}kHz，带宽利用率 ${cf.bw.toFixed(0)}%，频率响应完整。`);
+  }
+
+  return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 频谱图智能解读 ──
+function narrateSpectrogram() {
+  const A = STATE.analysis;
+  if (!A.spectrogram) return '';
+  const sg = A.spectrogram;
+  const lines = [];
+  const sr = A.sampleRate;
+  lines.push(`频谱图以时间为横轴，展示频率能量随时间的分布。横纹密集的区域代表持续的音调（如弦乐长音），竖纹代表瞬态击打（如鼓点）。`);
+  if (sr >= 96000) {
+    lines.push(`<span class="hint">${(sr/1000).toFixed(0)}kHz 采样率下的频谱图能显示超声波频段（20kHz+），但这部分能量对听感无贡献。</span>`);
+  }
+  return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 波形智能解读 ──
+function narrateWaveform() {
+  const A = STATE.analysis;
+  const lines = [];
+  const crest = A.dynamics.crest;
+  if (crest >= 14) {
+    lines.push(`波形有明显的强弱起伏，<span class="good">动态范围大</span>，符合古典乐/爵士乐的典型特征——安静段落和激昂段落之间有显著的幅度差异。`);
+  } else if (crest >= 10) {
+    lines.push(`波形有适度的高低变化，动态范围<span class="good">良好</span>，现代摇滚/独立音乐的常见表现。`);
+  } else if (crest >= 7) {
+    lines.push(`波形整体饱满、持续处于较响水平，<span class="warn">动态范围偏窄</span>。这是现代流行/R&B/Hip-Hop 母带的典型特征——为了在流媒体平台中显得"大声"而压缩了动态。`);
+  } else {
+    lines.push(`波形几乎全程贴近最大电平，<span class="bad">严重压缩</span>，动态范围极窄。音乐没有"呼吸感"，所有元素都在争抢响度。`);
+  }
+  if (A.clip.hasClipping) {
+    lines.push(`<span class="bad">波形顶部可以看到平坦的"切顶"现象——这是削波的直接证据。D/A 转换时这些削波会产生刺耳的咔嗒声和失真。</span>`);
+  }
+  return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 动态范围智能解读 ──
+function narrateDynamics() {
+  const A = STATE.analysis;
+  const d = A.dynamics;
+  const l = A.loudness;
+  const c = A.clip;
+  const lines = [];
+
+  const crest = d.crest;
+  if (A.isCommercialMaster) {
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="hint">这是商业母带的典型动态范围。现代流行/R&B/Hip-Hop 发行版通常将 Crest Factor 压缩至 5-9 dB，以在流媒体平台和广播中获得一致的响度感知。此消彼长，动态有所牺牲，但这属于行业标准而非"问题"。</span>`);
+  } else if (crest >= 14) {
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="good">优秀动态范围，音乐有自然的呼吸和起伏</span>`);
+  } else if (crest >= 11) {
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="good">良好动态，强弱对比清晰</span>`);
+  } else if (crest >= 8) {
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="warn">动态被适度压缩，是流行乐的常见处理手段</span>`);
+  } else {
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="bad">过度压缩导致动态不足，听感平坦、缺乏层次</span>`);
+  }
+
+  const lufs = l.integratedLoudnessLUFS;
+  lines.push(`<b>综合响度 ${lufs.toFixed(1)} LUFS</b> — ${lufs > -11 ? '<span class="warn">偏响。注意：流媒体平台（Spotify/Apple Music/YouTube）会自动将响度归一化到 -14~-16 LUFS，这意味着响度"优势"不会保留，但压缩带来的动态损失会永久存在</span>' : lufs > -18 ? '<span class="good">响度适中，符合主流推荐范围。在流媒体平台上不会被大幅降低音量</span>' : '<span class="good">偏安静，有足够余量</span>'}`);
+
+  if (l.lra > 12) {
+    lines.push(`<b>LRA ${l.lra.toFixed(1)} LU</b> — 响度范围宽广，歌曲内部有明显的安静-激昂对比。`);
+  } else if (l.lra > 6) {
+    lines.push(`<b>LRA ${l.lra.toFixed(1)} LU</b> — 响度范围适中。`);
+  } else {
+    lines.push(`<b>LRA ${l.lra.toFixed(1)} LU</b> — 响度范围窄，整曲响度均匀。`);
+  }
+
+  if (c.hasClipping) {
+    lines.push(`<span class="bad">⚠ <b>削波问题</b>：${c.clippedSamples} 个采样点被削平（${c.clippedPct.toFixed(3)}%），峰值电平 ${c.peakDB.toFixed(2)}dBFS。这意味着母带处理时增益过高，波形顶部被硬性切除。这种失真在镲片、军鼓等高频打击乐器上尤为明显。</span>`);
+    if (c.hasTruePeakOver) {
+      lines.push(`<span class="bad">⚠ True Peak 也检测到过载，D/A 转换输出时失真可能更严重。</span>`);
+    }
+  } else {
+    lines.push(`<span class="good">未检测到削波，峰值电平 ${c.peakDB.toFixed(2)}dBFS${c.peakDB > -0.5 ? '，接近上限但仍在安全范围内' : '，留有充足余量'}。</span>`);
+  }
+
+  if (A.dcOffset.isSignificant) {
+    lines.push(`<span class="bad">⚠ 直流偏移 ${(A.dcOffset.offset*100).toFixed(3)}%，浪费动态范围。</span>`);
+  } else {
+    lines.push(`<span class="good">无显著直流偏移。</span>`);
+  }
+
+  // ★ 根因推断
+  const diag = diagnoseRootCause();
+  if (diag.length > 0) {
+    lines.push(`<div style="margin-top:12px;padding:8px 12px;background:#0a1925;border-radius:6px;border-left:3px solid var(--ac);font-size:.8rem"><b style="color:var(--ac)">🔍 根因推断</b></div>`);
+    for (const d of diag) {
+      const sevColor = d.severity === 'good' ? 'var(--gr)' : d.severity === 'bad' ? 'var(--re)' : d.severity === 'warn' ? 'var(--ye)' : 'var(--ac)';
+      lines.push(`<p style="margin:5px 0;line-height:1.6"><span style="color:${sevColor};font-weight:600">${d.title}</span><br><span style="font-size:.75rem;color:var(--fg2)">${d.detail}</span></p>`);
+    }
+  }
+
+  return lines.map(l => `<p style="margin:5px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 立体声智能解读 ──
+function narrateStereo() {
+  const A = STATE.analysis;
+  if (!A.stereo) return '<p>此音频为单声道，不包含立体声信息。</p>';
+  const s = A.stereo;
+  const lines = [];
+  
+  lines.push(`<b>相关性 ${s.correlation.toFixed(3)}</b> — ${s.isOutOfPhase ? '<span class="bad">检测到反相！左右声道极性相反，在单声道设备上会导致声音抵消、人声消失</span>' : s.correlation > 0.95 ? '<span class="warn">左右声道高度一致，声场接近单声道，缺乏空间感</span>' : s.correlation > 0.7 ? '<span class="good">正常的立体声相关性，左右声道信息有差异但整体协调</span>' : '<span class="good">声道差异较大，声场宽阔</span>'}`);
+
+  lines.push(`<b>立体声宽度 ${s.stereoWidth.toFixed(0)}%</b> — ${s.stereoWidth > 80 ? '<span class="warn">宽度极大，可能是使用了极端立体声加宽效果器</span>' : s.stereoWidth > 60 ? '<span class="good">宽阔立体声，声场开阔</span>' : s.stereoWidth > 30 ? '<span class="good">自然宽度，听感舒适</span>' : '<span class="warn">偏窄，接近单声道</span>'}`);
+
+  const msDesc = s.midSideRatio > 6 ? '中间信号占主导，声场偏窄' : s.midSideRatio < -3 ? '<span class="warn">侧边信号过强，立体声加宽过度</span>' : '<span class="good">中/侧平衡良好</span>';
+  lines.push(`<b>Mid/Side ${s.midSideRatio.toFixed(1)}dB</b> — ${msDesc}`);
+
+  if (s.phaseInversionPct > 5) {
+    lines.push(`<span class="bad">⚠ 反相采样比例 ${s.phaseInversionPct.toFixed(1)}% — 超过 5% 就可能在单声道环境下产生明显的声音抵消。</span>`);
+  }
+
+  return lines.map(l => `<p style="margin:5px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 质量评估智能总结 ──
+function narrateQuality() {
+  const Q = STATE.analysis.quality;
+  const failItems = Q.filter(([,r]) => r === 'fail');
+  const warnItems = Q.filter(([,r]) => r === 'warn');
+  const hintItems = Q.filter(([,r]) => r === 'hint');
+  const A = STATE.analysis;
+  const lines = [];
+
+  if (failItems.length === 0 && warnItems.length === 0) {
+    if (A.isCommercialMaster) {
+      lines.push(`<span class="good">✅ 此音频检测到商业母带特征（削波+压缩），已自动标注为"提示"而非"失败"。这是 Apple Music / Spotify 等流媒体平台的标准母带处理，不影响音频品质。</span>`);
+    } else {
+      lines.push(`<span class="good">✅ 完美通过所有检测项，此音频在技术指标上无瑕疵。</span>`);
+    }
+    return lines.map(l => `<p style="margin:5px 0;line-height:1.7">${l}</p>`).join('');
+  }
+
+  for (const [dim, rating, detail] of failItems) {
+    lines.push(`<span class="bad"><b>${dim}</b>：${detail}。${dim === '削波' ? '这是最常见的"问题"，尤其在流行/摇滚/Hip-Hop 中几乎不可避免。削波意味着波形被切平，产生失真。' : dim === '立体声' ? '反相会导致单声道回放时声音空洞。检查录音或混音阶段是否有极性反转。' : dim === '动态' ? '动态被压缩到极致，这是响度战争的结果。音频失去了自然的强弱起伏。' : ''}</span>`);
+  }
+
+  for (const [dim, rating, detail] of hintItems.filter(([d]) => d === '削波' || d === '动态')) {
+    if (A.isCommercialMaster) {
+      lines.push(`<span class="hint"><b>${dim}</b>：${detail}。经检测此音频为商业母带，削波和动态压缩是母带工程师的刻意处理，属于行业惯例而非质量问题。</span>`);
+    }
+  }
+
+  if (failItems.length === 1 && failItems[0][0] === '削波' && warnItems.length === 0) {
+    lines.push(`<span class="hint">整体质量尚可，仅削波一项失败。这在商业发行音乐中极为常见，不代表文件损坏。</span>`);
+  }
+
+  // ★ 根因推断
+  const diagnostics = diagnoseRootCause().filter(d => d.severity !== 'info');
+  if (diagnostics.length > 0) {
+    lines.push(`<div style="margin-top:12px;padding:8px 12px;background:#0a1925;border-radius:6px;border-left:3px solid var(--ac);font-size:.8rem"><b style="color:var(--ac)">🔍 根因推断</b></div>`);
+    for (const d of diagnostics) {
+      const sevColor = d.severity === 'good' ? 'var(--gr)' : d.severity === 'bad' ? 'var(--re)' : d.severity === 'warn' ? 'var(--ye)' : 'var(--ac)';
+      lines.push(`<p style="margin:5px 0;line-height:1.6"><span style="color:${sevColor};font-weight:600">${d.title}</span><br><span style="font-size:.75rem;color:var(--fg2)">${d.detail}</span></p>`);
+    }
+  }
+
+  return lines.map(l => `<p style="margin:5px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 文件信息智能解读 ──
+function narrateFileInfo() {
+  const F = STATE.formatInfo;
+  const A = STATE.analysis;
+  const lines = [];
+
+  if (F.lossless) {
+    const br = F.actualBitrate / 1000;
+    lines.push(`<span class="good">无损 ${F.codec || '音频'}</span> — 数据完整保留，${F.fileExt.toUpperCase()} 容器。码率约 <b>${br.toFixed(0)}kbps</b>（${br > 2000 ? '高码率，说明音频内容复杂或采样率/位深度高' : br > 800 ? '中等码率，典型的 CD 品质无损' : '低码率，可能为单声道或低采样率'}）。`);
+  } else {
+    const br = F.actualBitrate / 1000;
+    lines.push(`<span class="warn">有损 ${F.codec || '编码'}</span> — 码率约 <b>${br.toFixed(0)}kbps</b>。${br > 256 ? '码率充足，在大多数设备上与无损难以区分' : br > 128 ? '中等码率，高频细节有轻微损失' : '<span class="bad">低码率，高频损失明显，可能出现金属音或水声伪影</span>'}。`);
+  }
+
+  const bd = A.actualBitDepth;
+  if (bd.estimated >= 20) {
+    lines.push(`<b>位深度 ${bd.estimated}-bit</b> — <span class="good">高精度，动态余量充足</span>（${bd.note}）。`);
+  } else if (bd.estimated >= 16) {
+    lines.push(`<b>位深度 ${bd.estimated}-bit</b> — CD 标准精度。`);
+  } else {
+    lines.push(`<b>位深度 ${bd.estimated}-bit</b> — <span class="warn">精度较低</span>。`);
+  }
+
+  const cf = A.cutoff;
+  lines.push(`<b>截止频率 ${(cf.freq/1000).toFixed(1)}kHz</b> — ${cf.freq > F.sampleRate * 0.45 && cf.bw > 95 ? '<span class="good">频率响应完整</span>' : cf.bw < 85 && F.sampleRate > 48000 ? '<span class="bad">频率响应受限，高概率为升频文件</span>' : '<span class="hint">频率响应有衰减</span>'}。`);
+
+  return lines.map(l => `<p style="margin:5px 0;line-height:1.7">${l}</p>`).join('');
+}
+
+// ── 根因诊断引擎 ──
+function diagnoseRootCause() {
+  const A = STATE.analysis;
+  const F = STATE.formatInfo;
+  const diag = [];
+  const sr = F.sampleRate;
+  const crest = A.dynamics.crest;
+  const lufs = A.loudness.integratedLoudnessLUFS;
+  const lra = A.loudness.lra;
+  const cf = A.cutoff;
+  const clip = A.clip;
+
+  //  1. 响度战争 (削波 + 压缩 + 高响度 + 无损)
+  const loudnessWar = F.lossless && clip.hasClipping && crest < 10 && lufs > -12;
+  if (loudnessWar) {
+    const era = crest < 6 ? '2008-2016 年"响度战争"高峰期' : crest < 8 ? '2010 年代响度战争末期' : '现代流媒体优化';
+    diag.push({
+      title: '母带风格：响度战争 / 硬限幅',
+      severity: 'info',
+      detail: `此音频符合<b>${era}</b>的母带特征：使用硬限幅器（Brickwall Limiter）将响度推至 ${lufs.toFixed(0)} LUFS，Crest Factor 仅 ${crest.toFixed(1)}dB，产生 ${clip.clippedSamples} 个削波点。这不是文件损坏——母带工程师刻意牺牲动态以换取持续的感知响度。在 Apple Music / Spotify / CD 发行版中，这种处理极为普遍。`,
+    });
+  }
+
+  //  2. 软削波过限幅 (无硬削波但动态极窄 + 峰值贴近上限)
+  if (!clip.hasClipping && crest < 7 && clip.peakDB > -0.3 && !loudnessWar) {
+    diag.push({
+      title: '母带风格：软削波 / 饱和式限幅',
+      severity: 'info',
+      detail: `虽然没有检测到数字削波，但 Crest Factor 仅 ${crest.toFixed(1)}dB 且峰值 ${clip.peakDB.toFixed(2)}dBFS——这是用<b>软削波</b>（Soft Clipper / Tape Saturation）替代硬限幅器的结果。失真更柔和，但"响声"本质不变。在 EDM / Hip-Hop / 电子乐中非常常见。`,
+    });
+  }
+
+  //  3. 伪高解析度 (高采样率 + 明显截止)
+  if (sr >= 88200 && cf.confidence === 'high' && cf.bw < 85) {
+    const realSR = cf.freq * 2.2;
+    diag.push({
+      title: '根因推断：伪高解析度（升频文件）',
+      severity: 'bad',
+      detail: `文件声称采样率 <b>${(sr/1000).toFixed(0)}kHz</b>，但频谱在 <b>${(cf.freq/1000).toFixed(1)}kHz</b> 处明显截断（带宽仅 ${cf.bw.toFixed(0)}%）。<b>高概率从 ${realSR < 50000 ? '44.1/48kHz' : (realSR/1000).toFixed(0)+'kHz'} 源升频而来</b>，并非原生高解析度录音。实际音频信息未增加，但文件体积膨胀了 ${((sr / (cf.freq * 2.2)) ** 2).toFixed(1)} 倍。`,
+    });
+  }
+
+  //  4. 录音增益过高 (削波 + 高动态 + 正常响度)
+  if (clip.hasClipping && crest > 10 && lufs < -14 && !loudnessWar) {
+    diag.push({
+      title: '根因推断：录音增益设置过高',
+      severity: 'warn',
+      detail: `削波与良好动态同时出现：整体动态范围宽裕（Crest ${crest.toFixed(1)}dB），响度适中（${lufs.toFixed(0)} LUFS），但仍有 ${clip.clippedSamples} 个削波点。<b>高概率是录音阶段增益过高</b>——个别的瞬态尖峰（如鼓点、镲片、钢琴强音）击穿了电平上限，而主体音频是干净的。建议在录音/混音阶段降低 2-4 dB 增益后重新导出。`,
+    });
+  }
+
+  //  5. 高比特深度的削波矛盾
+  if (clip.hasClipping && A.actualBitDepth.estimated >= 20 && !loudnessWar) {
+    diag.push({
+      title: '异常信号：高比特深度下的削波',
+      severity: 'warn',
+      detail: `${A.actualBitDepth.estimated}-bit 拥有超过 120dB 的理论动态范围，此文件却在如此大的余量下仍然削波。<b>高概率是录音链路增益设置严重不当</b>——话筒前置放大器或音频接口的输出电平过高。建议检查整个录音链路的增益级联（Gain Staging）。`,
+    });
+  }
+
+  //  6. 直流偏移 + 削波
+  if (A.dcOffset.isSignificant && clip.hasClipping) {
+    diag.push({
+      title: '根因推断：录音硬件问题（DC Offset）',
+      severity: 'bad',
+      detail: `直流偏移 ${(A.dcOffset.offset * 100).toFixed(3)}% 与削波 ${clip.clippedSamples} 点同时出现，<b>强烈暗示录音硬件存在故障</b>。常见原因：音频接口的耦合电容老化、调音台 DC 偏置、或电源接地环路。建议排查录音设备硬件。`,
+    });
+  }
+
+  //  7. 立体声反相
+  if (A.stereo && A.stereo.isOutOfPhase) {
+    diag.push({
+      title: '根因推断：立体声极性反转',
+      severity: 'bad',
+      detail: `左右声道相关性 ${A.stereo.correlation.toFixed(3)}，反相采样比例 ${A.stereo.phaseInversionPct.toFixed(1)}%。${A.stereo.correlation < 0 ? '整体呈<b>反相</b>，左右声道<b>极性完全相反</b>——' : '<b>部分反相</b>——'}在单声道设备上播放会导致信号抵消、中置元素（人声/贝斯/底鼓）消失。常见原因：XLR 线材的一端焊接错误（Pin 2/3 反接）、插件极性反转、或多麦克风录音时的相位干涉。`,
+    });
+  }
+
+  //  8. 立体声过宽
+  if (A.stereo && A.stereo.stereoWidth > 80 && A.stereo.correlation < 0.3) {
+    diag.push({
+      title: '提示：极端立体声加宽',
+      severity: 'hint',
+      detail: `立体声宽度 ${A.stereo.stereoWidth.toFixed(0)}%，相关性仅 ${A.stereo.correlation.toFixed(3)}。这可能源于<b>立体声加宽效果器</b>（Stereo Widener / Haas Effect），虽然声场宽阔，但在单声道下混时中置元素会<b>严重衰减</b>（通常 -6 ~ -12 dB）。建议检查单声道兼容性。`,
+    });
+  }
+
+  //  9. 过度压缩 (极低 LRA)
+  if (lra < 4 && lufs > -10) {
+    diag.push({
+      title: '提示：广播/电台级压缩',
+      severity: 'hint',
+      detail: `LRA 仅 ${lra.toFixed(1)} LU（整曲响度几乎无变化），配合 ${lufs.toFixed(0)} LUFS 的综合响度——这是<b>广播/电台的典型处理方式</b>，确保在嘈杂环境中每个字都能听清。如果这来自商业电台版本而非原始母带，则属于正常现象。`,
+    });
+  }
+
+  // 10. 古典 / 大动态特征
+  if (crest > 16 && lufs < -18) {
+    diag.push({
+      title: '判断：古典乐 / 原声录音特征',
+      severity: 'good',
+      detail: `Crest Factor ${crest.toFixed(1)}dB，LRA ${lra.toFixed(1)} LU，响度仅 ${lufs.toFixed(0)} LUFS——这是<b>古典乐、原声爵士或电影原声</b>的典型特征。动态范围完整保留，强弱对比鲜明。在普通设备上聆听可能需要调高音量；如需在现代流媒体平台发行，建议做适度响度提升（-2 ~ -4 dB）而非压缩。`,
+    });
+  }
+
+  // 11. 比特填充
+  if (A.actualBitDepth.estimated >= 20 && sr <= 48000 && cf.bw > 95 && !F.lossless) {
+    diag.push({
+      title: '提示：升比特文件',
+      severity: 'hint',
+      detail: `有损格式搭配 ${A.actualBitDepth.estimated}-bit，实际上有损编码的位深度是浮动的，探测到的位深度可能来自编码器的内部处理精度，而非源文件品质。`,
+    });
+  }
+
+  // 12. 16-bit 在 24-bit 容器
+  if (A.actualBitDepth.estimated <= 17 && A.actualBitDepth.estimated >= 15 && F.bitDepth && F.bitDepth >= 24) {
+    diag.push({
+      title: '根因推断：16-bit 音频装入 24-bit 容器',
+      severity: 'hint',
+      detail: `文件容器声明 ${F.bitDepth}-bit，但实际可检测的信号精度仅 ~16-bit。这在从 CD 翻录并导出为 24-bit ALAC/FLAC 时非常常见——额外的 8 位全是零填充，对音质无实际贡献，仅增加约 50% 的文件体积。`,
+    });
+  }
+
+  return diag;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  渲染
+// ═══════════════════════════════════════════════════════════════
+
+function renderAll() {
+  const wrap = $('#results');
+  wrap.innerHTML = '';
+
+  // 所有 section
+  const sections = [
+    ['overview', renderOverview],
+    ['spectrum', renderSpectrum],
+    ['spectrogram', renderSpectrogramChart],
+    ['waveform', renderWaveform],
+    ['dynamics', renderDynamics],
+    ['stereo', renderStereo],
+    ['quality', renderQuality],
+    ['info', renderFileInfo],
+  ];
+
+  for (const [id, fn] of sections) {
+    const div = document.createElement('div');
+    div.className = 'section';
+    div.id = 'section-' + id;
+    div.innerHTML = fn();
+    wrap.appendChild(div);
+  }
+
+  // 默认显示总览
+  $$('.section').forEach(s => s.style.display = (s.id === 'section-overview') ? '' : 'none');
+  $('#section-overview').style.display = '';
+
+  // 绘制 canvas
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      drawSpectrumCanvas();
+      drawSpectrogramCanvas();
+      drawWaveformCanvas();
+      drawPhaseCanvas();
+    });
+  });
+}
+
+function renderOverview() {
+  const F = STATE.formatInfo;
+  const A = STATE.analysis;
+  const Q = A.quality.filter(([d]) => !['格式','位深度','响度','LRA','TP过载','DC Offset'].includes(d));
+  const hid1 = 'help-分析总览';
+
+  let html = '';
+
+  // ★ 智能解读卡片
+  html += `<div class="card" style="border-left:3px solid var(--ac)"><div class="card-header" style="color:var(--ac)">📋 智能解读</div><div class="card-body">`;
+  html += generateNarrative();
+  html += `</div></div>`;
+
+  html += `<div class="card"><div class="card-header">分析总览<button class="help-toggle" onclick="toggleHelp('${hid1}')" id="bt-${hid1}">? 解读</button></div><div class="card-body">`;
+  html += `<div class="row-grid">`;
+  html += row('文件', F.filename, true);
+  html += row('时长', fmtDur(F.duration));
+  html += row('格式', `${F.codec || '?'} / ${F.container || F.fileExt.toUpperCase()}`, false, F.lossless ? 'var(--gr)' : 'var(--ye)');
+  html += row('采样率', `${(F.sampleRate/1000).toFixed(1)} kHz`);
+  html += row('声道', F.channels >= 2 ? `立体声 (${F.channels}ch)` : '单声道');
+  html += row('文件大小', fmtSize(F.fileSize));
+  html += row('码率', `${(F.actualBitrate/1000).toFixed(0)} kbps`);
+  html += row('实测位深度', `${A.actualBitDepth.estimated}-bit (${A.actualBitDepth.note})`);
+  html += row('峰值电平 (Sample)', `${A.clip.peakDB.toFixed(2)} dBFS`, false, A.clip.hasClipping ? 'var(--re)' : '');
+  html += row('True Peak (4x)', `${A.clip.truePeakDB} dBFS`, false, A.clip.hasTruePeakOver ? 'var(--re)' : '');
+  html += row('Crest Factor', `${A.dynamics.crest.toFixed(1)} dB`);
+  html += row('Integrated LUFS', `${A.loudness.integratedLoudnessLUFS.toFixed(1)} LUFS`);
+  html += row('Short-term LUFS Max', `${A.loudness.shortTermMaxLUFS.toFixed(1)} LUFS`);
+  html += row('LRA (响度范围)', `${A.loudness.lra.toFixed(1)} LU`);
+  html += row('DC Offset', `${A.dcOffset.isSignificant ? '⚠ ' + (A.dcOffset.offset*100).toFixed(3) + '%' : '正常 (' + A.dcOffset.dcDB.toFixed(1) + ' dB)'}`, false, A.dcOffset.isSignificant ? 'var(--ye)' : '');
+  html += row('立体声宽度', A.stereo ? `${A.stereo.stereoWidth.toFixed(0)}%` : 'N/A (单声道)');
+  html += `</div>`;
+  html += `<div class="help-body" id="${hid1}"><dl>
+    <dt>格式</dt><dd>编解码器 / 容器格式。<span class="good">ALAC / FLAC = 无损</span>，<span class="warn">AAC / MP3 = 有损</span>。M4A 即 MP4 音频容器，内部可能是 AAC 或 ALAC。</dd>
+    <dt>采样率</dt><dd>44.1kHz = CD 音质，48kHz = 影视标准。高于 48kHz 的文件体积大、普通人难以分辨差异，但录音室常用 96kHz 母带。</dd>
+    <dt>码率</dt><dd>有损格式的码率直接决定音质 — AAC 256kbps 已接近透明。无损格式码率可变，由原始信号复杂度决定。</dd>
+    <dt>实测位深度</dt><dd>通过分析最低有效位的活跃度估算的实际精度。<span class="warn">16-bit 文件标为 24-bit</span> 说明高位填充了零。</dd>
+    <dt>峰值电平 / True Peak</dt><dd>dBFS = 满刻度分贝，0 为最大值。<span class="bad">&gt;0 dBFS</span> = 削波。True Peak 考虑了采样点之间模拟重建的峰值，比 Sample Peak 更准确。</dd>
+    <dt>Crest Factor</dt><dd>峰值与平均值的比值，体现音乐动态。数值越高，强弱对比越明显。流行乐 8-12dB，古典/爵士 ≥14dB。</dd>
+    <dt>Integrated LUFS</dt><dd>国际标准响度单位。流媒体平台通常要求 -14 ~ -11 LUFS；广播标准 -23 LUFS。<span class="bad">＞-8 LUFS</span> = 过度压缩。</dd>
+    <dt>LRA</dt><dd>响度范围，排除极端值后的响度跨度。越大 = 强弱段落差异越大。古典乐 15-25 LU，流行乐 4-10 LU。</dd>
+    <dt>DC Offset</dt><dd>波形平均值的直流偏移。<span class="bad">＞0.1%</span> 需修复，否则浪费余量并影响后续处理。</dd>
+    <dt>立体声宽度</dt><dd>0% = 完全单声道，100% = 完全分离。30-70% 为正常立体声范围。</dd>
+  </dl></div>`;
+  html += `</div></div>`;
+
+  // 快速质量状态
+  const failCount = Q.filter(([,r]) => r === 'fail').length;
+  const warnCount = Q.filter(([,r]) => r === 'warn').length;
+  const passCount = Q.filter(([,r]) => r === 'pass').length;
+  const hintCount = Q.filter(([,r]) => r === 'hint').length;
+  html += `<div class="card"><div class="card-header">快速质量摘要</div><div class="card-body">`;
+  html += `<div class="row-grid">`;
+  html += row('通过', `${passCount} 项`, false, 'var(--gr)');
+  html += row('提示', `${hintCount} 项`, false, 'var(--ye)');
+  html += row('失败', `${failCount} 项`, false, failCount > 0 ? 'var(--re)' : 'var(--fg2)');
+  html += `</div>`;
+  // 展开失败/警告明细
+  const badItems = Q.filter(([,r]) => r === 'fail' || r === 'warn');
+  if (badItems.length > 0) {
+    html += `<div style="margin-top:8px;font-size:.75rem;line-height:1.8">`;
+    for (const [dim, rating, detail] of badItems) {
+      const color = rating === 'fail' ? 'var(--re)' : 'var(--ye)';
+      html += `<div style="display:flex;gap:8px;align-items:baseline"><b style="color:${color};min-width:60px">${dim}</b><span style="color:var(--fg2)">${detail}</span></div>`;
+    }
+    html += `</div>`;
+  }
+  if (A.isCommercialMaster) {
+    html += `<div style="margin-top:10px;padding:8px 12px;background:#1a2a1a;border-radius:6px;font-size:.75rem;color:var(--gr);line-height:1.6">
+      ℹ <b>商业母带</b> — 检测到的削波和动态压缩属于 Apple Music / Spotify 等流媒体平台的<b>标准母带处理</b>，非文件缺陷。母带工程师刻意将响度推到上限以保证在流媒体中的竞争力，少量削波是可接受的代价。
+    </div>`;
+  }
+  html += `</div></div></div>`;
+
+  return html;
+}
+
+function renderSpectrum() {
+  return `<div class="card"><div class="card-header">频率频谱 (平均 FFT)</div><div class="card-body">
+    <div class="canvas-wrap"><div class="label"><span>频率 (kHz)</span><span>幅度 (dB)</span></div>
+    <canvas id="spectrumCanvas" height="300"></canvas></div>
+    <div style="display:flex;gap:16px;font-size:.68rem;color:var(--fg3);margin-top:4px">
+      <span>■ 低音/中音 0-8k</span><span>■ 高音 8-16k</span><span>■ 超声波 16k+</span>
+    </div>
+    <div class="smart-card">${narrateSpectrum()}</div>
+    </div></div>`;
+}
+
+function renderSpectrogramChart() {
+  return `<div class="card"><div class="card-header">频谱图 (Spectrogram)</div><div class="card-body">
+    <canvas id="specCanvas" height="320"></canvas>
+    <div style="font-size:.65rem;color:var(--fg3);margin-top:2px">时间 →</div>
+    <div class="smart-card">${narrateSpectrogram()}</div>
+    </div></div>`;
+}
+
+function renderWaveform() {
+  return `<div class="card"><div class="card-header">波形预览</div><div class="card-body">
+    <canvas id="waveCanvas" height="180"></canvas>
+    <div class="smart-card">${narrateWaveform()}</div>
+    </div></div>`;
+}
+
+function renderDynamics() {
+  const A = STATE.analysis;
+  const d = A.dynamics;
+  const l = A.loudness;
+  const c = A.clip;
+  let html = '';
+  html += buildCard('动态范围分析', [
+    ['Crest Factor (峰值因数)', `${d.crest.toFixed(1)} dB`, d.crest >= 14 ? 'var(--gr)' : (d.crest >= 8 ? 'var(--ye)' : 'var(--re)')],
+    ['Sample Peak (采样峰值)', `${c.peakDB.toFixed(2)} dBFS`],
+    ['True Peak (4x 过采样)', `${typeof c.truePeakDB === 'string' ? c.truePeakDB : c.truePeakDB + ' dBFS'}`, c.hasTruePeakOver ? 'var(--re)' : ''],
+    ['RMS 电平', `${d.rmsDB.toFixed(2)} dBFS`],
+    ['Integrated LUFS (ITU-R BS.1770)', `${l.integratedLoudnessLUFS.toFixed(1)} LUFS`],
+    ['Short-term LUFS Max', `${l.shortTermMaxLUFS.toFixed(1)} LUFS`],
+    ['LRA (Loudness Range)', `${l.lra.toFixed(1)} LU`],
+    ['EBU R128 广播标准', '-23 LUFS (±1 LU)'],
+    ['DC Offset', `${A.dcOffset.isSignificant ? '⚠ 检测到: ' + (A.dcOffset.offset*100).toFixed(3) + '%' : '未检测到 (' + A.dcOffset.dcDB.toFixed(1) + ' dB)'}`, A.dcOffset.isSignificant ? 'var(--ye)' : 'var(--gr)'],
+    ['削波检测', c.hasClipping ? `检测到削波 (${c.clippedSamples} 采样点)` : '未检测到削波', c.hasClipping ? 'var(--re)' : 'var(--gr)'],
+    ['削波比例', `${c.clippedPct.toFixed(4)}%`],
+    ['连续削波最大长度', `${c.maxConsecutiveClip} 采样点`],
+    ['说明', d.crest >= 14 ? '优秀动态范围 — 音频自然呼吸' : (d.crest >= 10 ? '良好' : (d.crest >= 8 ? '适度压缩 — 响度战争迹象' : '过度压缩 — 响度战争严重')), d.crest >= 14 ? 'var(--gr)' : (d.crest >= 8 ? 'var(--ye)' : 'var(--re)')],
+  ], `<dl>
+    <dt>Crest Factor（峰值因数）</dt><dd>峰值与 RMS 的差值，反映音频「呼吸空间」。<br><span class="good">≥14 dB</span>：自然动态，适合古典/爵士 | <span class="warn">8-14 dB</span>：适度压缩，现代流行常见 | <span class="bad">&lt;8 dB</span>：过度压缩，听觉疲劳。</dd>
+    <dt>Sample Peak vs True Peak</dt><dd>Sample Peak 只看离散采样点，True Peak 用 4 倍过采样检测模拟信号重建后的真实峰值。<span class="bad">True Peak &gt; 0 dBTP</span> 意味着 DAC 输出可能削波。</dd>
+    <dt>RMS 电平</dt><dd>均方根平均值，代表主观响度感知。流行乐通常在 -12 ~ -6 dBFS。</dd>
+    <dt>Integrated LUFS（综合响度）</dt><dd>ITU-R BS.1770-4 标准，模拟人耳感知的整曲响度。<br><span class="good">-24 ~ -18 LUFS</span>：广播/古典 | <span class="warn">-18 ~ -12 LUFS</span>：流媒体正常范围 | <span class="bad">&gt; -8 LUFS</span>：极度压缩。</dd>
+    <dt>Short-term LUFS Max</dt><dd>3 秒滑动窗中最响的段落。与 Integrated 差值大说明强弱对比明显。</dd>
+    <dt>LRA（响度范围）</dt><dd>排除极端 10% 后的响度跨度，单位 LU。古典乐通常 15-25 LU，流行 4-10 LU，播客 3-6 LU。</dd>
+    <dt>DC Offset（直流偏移）</dt><dd>波形平均偏离零线的程度。<span class="bad">偏移＞0.1%</span> 表明录音设备或处理链有问题，会浪费动态余量并导致削波。</dd>
+    <dt>削波 (Clipping)</dt><dd>当信号幅度超过 0 dBFS 时发生。<span class="bad">有削波</span> 说明母带推得过响或录音增益过高，会产生失真。</dd>
+  </dl>`, narrateDynamics());
+  return html;
+}
+
+function renderStereo() {
+  const A = STATE.analysis;
+  if (!A.stereo) {
+    return buildCard('立体声与相位分析', [
+      ['声道', '单声道 (1ch)'], ['说明', '此文件为单声道录音，无立体声信息']
+    ], null, narrateStereo());
+  }
+  const s = A.stereo;
+  return buildCard('立体声与相位分析', [
+    ['声道数', `${STATE.channels} 声道`],
+    ['相关性系数 (r)', `${s.correlation.toFixed(4)}`, s.correlation > 0.9 ? 'var(--ye)' : (s.isOutOfPhase ? 'var(--re)' : 'var(--gr)')],
+    ['立体声宽度', `${s.stereoWidth.toFixed(0)}%`],
+    ['Mid/Side 比值', `${s.midSideRatio.toFixed(1)} dB`],
+    ['反相检测', s.isOutOfPhase ? '检测到反相 (相位问题!)' : '正常', s.isOutOfPhase ? 'var(--re)' : 'var(--gr)'],
+    ['反相采样比例', `${s.phaseInversionPct.toFixed(2)}%`],
+  ], `<dl>
+    <dt>相关性系数 (Correlation)</dt><dd>左右声道相位一致性，范围 -1 ~ +1。<br><span class="good">0.2 ~ 0.8</span>：自然立体声 | <span class="warn">&gt;0.9</span>：接近单声道，声场窄 | <span class="bad">&lt;0（负数）</span>：反相，可能造成单声道兼容问题。</dd>
+    <dt>立体声宽度</dt><dd>信号立体声成分与单声成分的比值。0% = 完全单声道，100% = 纯侧边信号。<span class="good">30-70%</span> 是比较舒适的立体声宽度。</dd>
+    <dt>Mid/Side 比值</dt><dd>中间信号（L+R）与侧边信号（L-R）的电平比。<span class="warn">&gt;6 dB</span> 接近单声道，<span class="warn">&lt;-3 dB</span> 侧边过强可能导致相位问题。</dd>
+    <dt>反相检测</dt><dd><span class="bad">有反相</span> 意味着左右声道存在大量极性相反的采样点，在单声道下混时会造成信号抵消、声音变薄。</dd>
+  </dl>`, narrateStereo()) + `<div class="card"><div class="card-header">相位示波器 (Lissajous)</div><div class="card-body">
+    <canvas id="phaseCanvas" height="280" style="max-height:280px;aspect-ratio:1;margin:0 auto;display:block;width:auto"></canvas>
+    <div style="text-align:center;font-size:.68rem;color:var(--fg3);margin-top:4px">左声道 → · ← 右声道 | 对角线 = 单声道 | 圆形 = 宽阔立体声</div></div></div>`;
+}
+
+function renderQuality() {
+  const Q = STATE.analysis.quality;
+  const title = '综合质量评估';
+  const hid = 'help-' + title.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+  let html = `<div class="card"><div class="card-header">${title}<button class="help-toggle" onclick="toggleHelp('${hid}')" id="bt-${hid}">? 解读</button></div><div class="card-body">`;
+  for (const [dim, rating, detail] of Q) {
+    const labels = { pass: '通过', hint: '提示', warn: '警告', fail: '失败' };
+    html += `<div class="card-row"><span class="lbl">${dim}</span><span><span class="badge badge-${rating}">${labels[rating]}</span> <span class="val" style="font-size:.78rem">${detail}</span></span></div>`;
+  }
+  html += `<div class="smart-card">${narrateQuality()}</div>`;
+  html += `<div class="help-body" id="${hid}"><dl>
+    <dt>通过 <span class="badge badge-pass" style="vertical-align:middle">通过</span></dt><dd>此项指标符合专业音频质量标准，无需关注。</dd>
+    <dt>提示 <span class="badge badge-hint" style="vertical-align:middle">提示</span></dt><dd>有可供参考的信息，不影响质量判定。例如采样率、位深度等属性。</dd>
+    <dt>警告 <span class="badge badge-warn" style="vertical-align:middle">警告</span></dt><dd>指标存在轻微问题或边缘情况。建议了解原因，但不一定需要修复。</dd>
+    <dt>失败 <span class="badge badge-fail" style="vertical-align:middle">失败</span></dt><dd>检测到明显缺陷（削波、反相、DC偏移等）。建议检查原始录音或母带处理。</dd>
+    <dt>检测项目说明</dt><dd>
+      <b>采样率/过采样</b>：检查采样率与频率上限是否匹配。96kHz 但频谱在 22kHz 截止 = 可能从 44.1k 升频而来。<br>
+      <b>削波</b>：采样点或 True Peak 超过 0 dBFS，会产生可闻失真。<br>
+      <b>动态</b>：Crest Factor 过低说明音频被过度压缩（响度战争）。<br>
+      <b>立体声</b>：反相可能导致单声道回放时声音空洞或消失。<br>
+      <b>DC 偏移</b>：直流分量浪费动态余量，应由录音设备过滤。
+    </dd>
+  </dl></div>`;
+  html += '</div></div>';
+  return html;
+}
+
+function renderFileInfo() {
+  const F = STATE.formatInfo;
+  const A = STATE.analysis;
+  return buildCard('详细文件信息', [
+    ['文件名', F.filename],
+    ['文件大小', fmtSize(F.fileSize)],
+    ['扩展名', F.fileExt.toUpperCase()],
+    ['容器格式', F.container || '由文件头解析'],
+    ['编解码器', F.codec || '由浏览器解码'],
+    ['无损 / 有损', F.lossless ? '无损' : '有损', F.lossless ? 'var(--gr)' : 'var(--ye)'],
+    ['标称采样率', `${(F.sampleRate/1000).toFixed(1)} kHz`],
+    ['声道数', `${F.channels} ${F.channels >= 2 ? '(立体声)' : '(单声道)'}`],
+    ['时长', fmtDur(F.duration)],
+    ['平均码率', `${(F.actualBitrate/1000).toFixed(1)} kbps`],
+    ['实测位深度', `${A.actualBitDepth.estimated}-bit — ${A.actualBitDepth.note} (${A.actualBitDepth.detail})`],
+    ['截止频率', `${(A.cutoff.freq/1000).toFixed(1)} kHz (BW ${A.cutoff.bw.toFixed(0)}%, 置信度: ${A.cutoff.confidence})`],
+  ], `<dl>
+    <dt>容器 vs 编解码器</dt><dd>容器（如 M4A/FLAC/MP3）是文件的"外壳"，定义数据如何组织；编解码器（如 ALAC/AAC/MP3）是音频数据实际的压缩算法。M4A 容器内可能是 AAC（有损）或 ALAC（无损）。</dd>
+    <dt>采样率 (Sample Rate)</dt><dd>每秒采集的音频样本数。<span class="good">44.1 kHz</span> = CD 标准，覆盖 0-22.05 kHz 人耳可闻范围；<span class="good">48 kHz</span> = 影视标准；<span class="warn">96/192 kHz</span> = 录音室母带，文件体积巨大，普通回放设备未必受益。</dd>
+    <dt>位深度 (Bit Depth)</dt><dd>每个采样点的精度。16-bit = CD 标准（96 dB 动态范围）；24-bit = 录音室标准（144 dB）。<span class="warn">16-bit 文件标为 24-bit</span> 说明实际有效位数不足。</dd>
+    <dt>码率 (Bitrate)</dt><dd>每秒音频数据量。<span class="bad">有损格式码率低</span> 意味着信息被丢弃，高频细节损失；<span class="good">无损格式码率高</span> 是好事，代表完整保留。</dd>
+    <dt>截止频率</dt><dd>频谱中高频能量开始明显衰减的频率。<span class="bad">CD 源 22 kHz 截止是正常的</span>；<span class="warn">96kHz 文件却在 22kHz 截止</span> 说明可能从 CD 源升频而来，并非真 96kHz 录音。</dd>
+  </dl>`, narrateFileInfo());
+}
+
+function buildCard(title, items, helpHtml, smartHtml) {
+  const hid = 'help-' + title.replace(/[^a-zA-Z0-9\u4e00-\u9fff]/g, '');
+  let html = `<div class="card"><div class="card-header">${title}`;
+  if (helpHtml) {
+    html += `<button class="help-toggle" onclick="toggleHelp('${hid}')" id="bt-${hid}">? 解读</button>`;
+  }
+  html += `</div><div class="card-body">`;
+  for (const [label, value, color] of items) {
+    const c = color ? `color:${color};` : '';
+    html += `<div class="card-row"><span class="lbl">${label}</span><span class="val" style="${c}">${value}</span></div>`;
+  }
+  if (smartHtml) {
+    html += `<div class="smart-card">${smartHtml}</div>`;
+  }
+  if (helpHtml) {
+    html += `<div class="help-body" id="${hid}">${helpHtml}</div>`;
+  }
+  html += '</div></div>';
+  return html;
+}
+function toggleHelp(hid) {
+  const body = document.getElementById(hid);
+  const btn = document.getElementById('bt-' + hid);
+  if (!body || !btn) return;
+  const isOpen = body.classList.toggle('open');
+  btn.classList.toggle('open', isOpen);
+  btn.textContent = isOpen ? '✕ 收起' : '? 解读';
+}
+
+function row(label, value, fullWidth, color) {
+  const c = color ? `color:${color};` : '';
+  const colSpan = fullWidth ? 'style="grid-column:1/-1"' : '';
+  return `<div class="info-item card-row" ${colSpan}><span class="lbl">${label}</span><span class="val" style="${c}">${value}</span></div>`;
+}
+
+// ═══════════════════════════════════════════
+//  Canvas 绘图
+// ═══════════════════════════════════════════
+
+function drawSpectrumCanvas() {
+  const canvas = $('#spectrumCanvas'); if (!canvas) return;
+  const A = STATE.analysis;
+  const { freqs, spectrum } = A;
+  const sr = A.sampleRate;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(getCW(canvas), 300), H = 300;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
+
+  // 网格
+  ctx.strokeStyle = 'rgba(48,54,61,0.4)'; ctx.lineWidth = 0.5;
+  for (let db = -120; db <= 0; db += 20) {
+    const y = H - ((-db) / 120 * H * 0.88) - H * 0.06;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+  }
+  const maxKhz = sr / 2000;
+  for (let khz = 0; khz <= maxKhz; khz += Math.ceil(maxKhz / 10)) {
+    const x = (khz / maxKhz) * W;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+  }
+
+  // 区域着色
+  const x8 = (8 / maxKhz) * W, x16 = (16 / maxKhz) * W;
+  ctx.fillStyle = 'rgba(63,185,80,.04)'; ctx.fillRect(0, 0, Math.min(x8, W), H);
+  ctx.fillStyle = 'rgba(210,153,34,.04)'; ctx.fillRect(Math.min(x8, W), 0, Math.max(0, Math.min(x16, W) - x8), H);
+  ctx.fillStyle = 'rgba(248,81,73,.04)'; ctx.fillRect(Math.min(x16, W), 0, Math.max(0, W - x16), H);
+
+  // 频谱曲线
+  ctx.beginPath();
+  const maxIdx = Math.min(freqs.length - 1, Math.floor(freqs.length * maxKhz / (freqs[freqs.length - 1] || 1)));
+  for (let i = 0; i <= maxIdx; i++) {
+    const x = (freqs[i] / maxKhz) * W;
+    const db = Math.max(-120, spectrum[i]);
+    const y = H - ((db + 120) / 120 * H * 0.88) - H * 0.06;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1.2; ctx.stroke();
+  ctx.lineTo((freqs[maxIdx] / maxKhz) * W, H); ctx.lineTo(0, H); ctx.closePath();
+  ctx.fillStyle = 'rgba(88,166,255,.06)'; ctx.fill();
+
+  // 标签
+  ctx.fillStyle = '#6e7681'; ctx.font = '9px -apple-system,"Microsoft YaHei",sans-serif';
+  for (let khz = 0; khz <= maxKhz; khz += Math.ceil(maxKhz / 8)) {
+    ctx.fillText(khz.toFixed(0) + 'k', (khz / maxKhz) * W + 3, H - 4);
+  }
+  for (let db = -120; db <= 0; db += 20) {
+    const y = H - ((-db) / 120 * H * 0.88) - H * 0.06;
+    ctx.fillText(db + ' dB', 4, y - 4);
+  }
+}
+
+function drawSpectrogramCanvas() {
+  const canvas = $('#specCanvas'); if (!canvas) return;
+  const sg = STATE.analysis.spectrogram;
+  if (!sg || !sg.data || sg.data.length === 0) return;
+  const { fAxis, tAxis, data } = sg;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(getCW(canvas), 300), H = 320;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  // putImageData 不受变换影响 → 使用位图像素尺寸
+  const bw = canvas.width, bh = canvas.height;
+  const cols = data.length, rows = fAxis.length;
+  const imgData = ctx.createImageData(bw, bh);
+  const raw = imgData.data;
+  const maxFreqIdx = Math.min(rows - 1, Math.floor(rows * Math.min(STATE.sampleRate / 2000, 24) / (fAxis[rows - 1] || 1)));
+
+  // 找范围
+  const allVals = [];
+  for (let c = 0; c < cols; c++) { const row = data[c]; for (let r = 0; r < rows; r++) allVals.push(row[r]); }
+  allVals.sort((a, b) => a - b);
+  const vMin = allVals[Math.floor(allVals.length * .1)];
+  const vMax = allVals[Math.floor(allVals.length * .95)];
+  const range = Math.max(1e-12, vMax / vMin);
+  const logRange = Math.log(range);
+
+  for (let px = 0; px < bw; px++) {
+    const ci = Math.floor(px / bw * cols);
+    for (let py = 0; py < bh; py++) {
+      const ri = rows - 1 - Math.floor(py / bh * maxFreqIdx);
+      const val = data[Math.min(ci, cols - 1)][Math.max(0, Math.min(ri, rows - 1))];
+      const t = Math.max(0, Math.min(1, Math.log(Math.max(val, 1e-12) / vMin) / logRange));
+      const [r, g, b] = magma(t);
+      const idx = (py * bw + px) * 4;
+      raw[idx] = r; raw[idx + 1] = g; raw[idx + 2] = b; raw[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+
+  // 标签（使用 CSS 像素坐标）
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#6e7681'; ctx.font = '9px -apple-system,"Microsoft YaHei",sans-serif';
+  const mpf = Math.min(STATE.sampleRate / 2000, 24);
+  for (let khz = 0; khz <= mpf; khz += Math.ceil(mpf / 6)) {
+    ctx.fillText(khz + 'k', 4, H - (khz / mpf * H) - 2);
+  }
+  const maxT = tAxis[tAxis.length - 1];
+  for (let t = 0; t <= maxT; t += Math.ceil(maxT / 8)) {
+    ctx.fillText(t.toFixed(0) + 's', t / maxT * W + 2, H - 4);
+  }
+}
+
+function drawWaveformCanvas() {
+  const canvas = $('#waveCanvas'); if (!canvas) return;
+  const wf = STATE.analysis.waveform;
+  if (!wf || wf.length === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(getCW(canvas), 300), H = 180;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
+
+  const mid = H / 2;
+  ctx.strokeStyle = 'rgba(48,54,61,0.4)'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
+
+  ctx.fillStyle = 'rgba(88,166,255,.5)';
+  const barW = Math.max(1, W / wf.length);
+  for (let i = 0; i < wf.length; i++) {
+    const h = wf[i] * mid * 0.9;
+    ctx.fillRect(i * barW, mid - h, Math.max(1, barW - 0.5), h * 2);
+  }
+
+  ctx.fillStyle = '#6e7681'; ctx.font = '9px -apple-system,"Microsoft YaHei",sans-serif';
+  ctx.fillText('0:00', 4, H - 4);
+  ctx.fillText(fmtDur(STATE.duration), W - 40, H - 4);
+}
+
+function drawPhaseCanvas() {
+  const canvas = $('#phaseCanvas'); if (!canvas || !STATE.analysis.phaseData) return;
+  const pts = STATE.analysis.phaseData;
+  const dpr = window.devicePixelRatio || 1;
+  const S = Math.min(Math.max(getCW(canvas, 280), 200), 280);
+  canvas.width = S * dpr; canvas.height = S * dpr;
+  canvas.style.width = S + 'px'; canvas.style.height = S + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, S, S);
+
+  // 对角线
+  ctx.strokeStyle = 'rgba(48,54,61,0.5)'; ctx.lineWidth = 0.5;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(S, S); ctx.stroke();
+
+  // 点
+  const half = S / 2;
+  ctx.fillStyle = 'rgba(57,210,192,.4)';
+  for (const { x, y } of pts) {
+    ctx.fillRect(half + x * half * 0.9, half - y * half * 0.9, 1.2, 1.2);
+  }
+}
+
+function magma(t) {
+  const c = [[0.001,0.000,0.014],[0.016,0.009,0.084],[0.061,0.013,0.177],[0.118,0.011,0.269],[0.177,0.016,0.347],[0.236,0.024,0.388],[0.292,0.039,0.399],[0.345,0.063,0.393],[0.397,0.089,0.389],[0.447,0.116,0.385],[0.496,0.142,0.384],[0.544,0.169,0.384],[0.592,0.196,0.386],[0.639,0.223,0.389],[0.686,0.251,0.394],[0.732,0.278,0.401],[0.778,0.307,0.409],[0.824,0.335,0.419],[0.869,0.364,0.430],[0.914,0.393,0.442],[0.959,0.423,0.456],[0.992,0.460,0.479],[0.997,0.503,0.507],[0.998,0.547,0.536],[1.000,0.590,0.565],[1.000,0.634,0.595],[1.000,0.678,0.625],[1.000,0.723,0.656],[1.000,0.768,0.687],[1.000,0.813,0.719],[1.000,0.858,0.751],[1.000,0.904,0.784],[1.000,0.950,0.817],[1.000,0.997,0.850]];
+  const idx = t * (c.length - 1);
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  const f = idx - lo;
+  return [Math.round((c[lo][0]*(1-f)+c[hi][0]*f)*255), Math.round((c[lo][1]*(1-f)+c[hi][1]*f)*255), Math.round((c[lo][2]*(1-f)+c[hi][2]*f)*255)];
+}
+
+// ═══════════════════════════════════════════
+//  侧边栏导航
+// ═══════════════════════════════════════════
+
+$$('.nav-item').forEach(item => {
+  item.addEventListener('click', function() {
+    $$('.nav-item').forEach(n => n.classList.remove('active'));
+    this.classList.add('active');
+    const sectionId = 'section-' + this.dataset.section;
+    $$('.section').forEach(s => s.style.display = (s.id === sectionId) ? '' : 'none');
+    // 双重 rAF 确保 display 变更后的 layout 完成
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (this.dataset.section === 'spectrum') drawSpectrumCanvas();
+        if (this.dataset.section === 'spectrogram') drawSpectrogramCanvas();
+        if (this.dataset.section === 'waveform') drawWaveformCanvas();
+        if (this.dataset.section === 'stereo') drawPhaseCanvas();
+      });
+    });
+  });
+});
+
+// ═══════════════════════════════════════════
+//  工具函数
+// ═══════════════════════════════════════════
+
+function fmtSize(b) { return b < 1024 ? b + ' B' : (b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576).toFixed(1) + ' MB'); }
+function fmtDur(s) { const m = Math.floor(s / 60); return s >= 3600 ? `${Math.floor(s/3600)}:${String(m%60).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}` : `${m}:${String(Math.floor(s%60)).padStart(2,'0')}`; }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Canvas 宽度获取 (解决 display:none 时 getBoundingClientRect 返回 0)
+function getCW(canvas, fallback = 600) {
+  const pw = canvas.parentElement?.clientWidth || 0;
+  if (pw > 0) return pw;
+  const rw = canvas.getBoundingClientRect().width;
+  return rw > 0 ? rw : fallback;
+}
+
+function showLoading(show, text) {
+  const overlay = $('#loadingOverlay');
+  overlay.style.display = show ? 'flex' : 'none';
+  if (text) $('#loadingText').textContent = text;
+}
+
+function updateProgress(pct) {
+  $('#progressBar').style.width = pct + '%';
+}
+
+function setStatus(left, right, isError) {
+  const el = $('#statusLeft');
+  el.textContent = left;
+  if (isError) el.style.color = 'var(--re)';
+  else el.style.color = '';
+  if (right) $('#statusRight').textContent = right;
+}
+
+function exportReport() {
+  const F = STATE.formatInfo;
+  const A = STATE.analysis;
+  const lines = [
+    '=== Audio Analyzer Pro v7.0 Report ===',
+    `File: ${F.filename}`,
+    `Size: ${fmtSize(F.fileSize)}`,
+    `Format: ${F.codec} / ${F.container} ${F.lossless ? '(Lossless)' : '(Lossy)'}`,
+    `Sample Rate: ${(F.sampleRate/1000).toFixed(1)} kHz`,
+    `Channels: ${F.channels}`,
+    `Duration: ${fmtDur(F.duration)}`,
+    `Bitrate: ${(F.actualBitrate/1000).toFixed(1)} kbps`,
+    `Actual Bit Depth: ${A.actualBitDepth.estimated}-bit (${A.actualBitDepth.note})`,
+    '',
+    '--- Quality Assessment ---',
+    ...A.quality.map(([d, r, det]) => `[${r.toUpperCase()}] ${d}: ${det}`),
+    '',
+    '--- Dynamics ---',
+    `Crest Factor: ${A.dynamics.crest.toFixed(1)} dB`,
+    `Sample Peak: ${A.dynamics.peakDB.toFixed(2)} dBFS`,
+    `True Peak (4x): ${typeof A.clip.truePeakDB === 'string' ? A.clip.truePeakDB : A.clip.truePeakDB + ' dBFS'}`,
+    `RMS Level: ${A.dynamics.rmsDB.toFixed(2)} dBFS`,
+    `Integrated LUFS (BS.1770): ${A.loudness.integratedLoudnessLUFS.toFixed(1)} LUFS`,
+    `Short-term LUFS Max: ${A.loudness.shortTermMaxLUFS.toFixed(1)} LUFS`,
+    `LRA (Loudness Range): ${A.loudness.lra.toFixed(1)} LU`,
+    `Clipping: ${A.clip.hasClipping ? 'YES (' + A.clip.clippedSamples + ' samples, ' + A.clip.clippedPct.toFixed(3) + '%)' : 'No'}`,
+    `True Peak Overload: ${A.clip.hasTruePeakOver ? 'YES' : 'No'}`,
+    `DC Offset: ${A.dcOffset.isSignificant ? 'YES (' + (A.dcOffset.offset*100).toFixed(3) + '%)' : 'No'}`,
+    `Cutoff Frequency: ${(A.cutoff.freq/1000).toFixed(1)} kHz (BW ${A.cutoff.bw.toFixed(0)}%, confidence: ${A.cutoff.confidence})`,
+    '',
+    ...(A.stereo ? [`Stereo Correlation: ${A.stereo.correlation.toFixed(4)}`, `Stereo Width: ${A.stereo.stereoWidth.toFixed(0)}%`, `Mid/Side Ratio: ${A.stereo.midSideRatio.toFixed(1)} dB`] : ['Audio: Mono']),
+    '',
+    'Generated by Audio Analyzer Pro v7.0',
+    new Date().toISOString()
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = (F.filename || 'audio') + '_report.txt';
+  a.click(); URL.revokeObjectURL(url);
+}
+
+// 立即加载 FFmpeg 兜底
+initFFmpegFallback().catch(() => {
+  $('#statusRight').textContent = '通用解码引擎加载失败 — 部分格式可能无法分析';
+});
+</script>
+</body>
+</html>
