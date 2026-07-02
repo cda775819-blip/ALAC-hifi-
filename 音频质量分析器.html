@@ -236,6 +236,9 @@ body{
       <div class="nav-item" data-section="spectrogram">
         <span class="ico">▦</span> 频谱图
       </div>
+      <div class="nav-item" data-section="soundspectrum">
+        <span class="ico">▥</span> 声谱
+      </div>
       <div class="nav-item" data-section="waveform">
         <span class="ico">▤</span> 波形
       </div>
@@ -1978,6 +1981,9 @@ async function runAnalysis() {
   // 频谱图
   STATE.analysis.spectrogram = computeSpectrogram(mono, sr);
 
+  // 声谱（频段能量柱状图）
+  STATE.analysis.bandSpectrum = computeBandSpectrum(freqs, spectrum, sr);
+
   // 截止频率
   STATE.analysis.cutoff = detectCutoff(freqs, spectrum, sr);
 
@@ -2130,6 +2136,30 @@ function computeSpectrogram(data, sr) {
   const fAxis = new Float32Array(half);
   for (let k = 0; k < half; k++) fAxis[k] = (k * sr) / fftSize;
   return { fAxis, tAxis, data: spec };
+}
+
+// ── 声谱（频段能量柱状图）──
+function computeBandSpectrum(freqs, spectrum, sr) {
+  const nyquist = sr / 2;
+  const bands = 40;
+  const minFreq = 20, maxFreq = Math.min(nyquist, 20000);
+  const logMin = Math.log10(minFreq), logMax = Math.log10(maxFreq);
+  const result = { labels: [], freqs: [], values: [], peakDB: -200 };
+  
+  for (let b = 0; b < bands; b++) {
+    const f0 = Math.pow(10, logMin + (logMax - logMin) * b / bands);
+    const f1 = Math.pow(10, logMin + (logMax - logMin) * (b + 1) / bands);
+    let sum = 0, count = 0;
+    for (let i = 0; i < freqs.length; i++) {
+      if (freqs[i] >= f0 && freqs[i] < f1) { sum += spectrum[i]; count++; }
+    }
+    const avgDB = count > 0 ? sum / count : -120;
+    result.labels.push(f0 < 1000 ? f0.toFixed(0) + 'Hz' : (f0 / 1000).toFixed(1) + 'k');
+    result.freqs.push(f0);
+    result.values.push(avgDB);
+    if (avgDB > result.peakDB) result.peakDB = avgDB;
+  }
+  return result;
 }
 
 function detectCutoff(freqs, spectrum, sr) {
@@ -2759,6 +2789,45 @@ function narrateSpectrogram() {
   return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
 }
 
+// ── 声谱智能解读 ──
+function narrateBandSpectrum() {
+  const A = STATE.analysis;
+  const bs = A.bandSpectrum;
+  if (!bs || !bs.values) return '';
+  const lines = [];
+  const vals = bs.values;
+  
+  // 分频段统计
+  let lowSum = 0, midSum = 0, highSum = 0;
+  let lowN = 0, midN = 0, highN = 0;
+  const n = vals.length;
+  for (let i = 0; i < n; i++) {
+    const f = bs.freqs[i];
+    if (f < 250) { lowSum += vals[i]; lowN++; }
+    else if (f < 2000) { midSum += vals[i]; midN++; }
+    else { highSum += vals[i]; highN++; }
+  }
+  const lowAvg = lowN > 0 ? lowSum / lowN : -120;
+  const midAvg = midN > 0 ? midSum / midN : -120;
+  const highAvg = highN > 0 ? highSum / highN : -120;
+
+  lines.push(`<b>低频段（20-250Hz）</b>：平均 ${lowAvg.toFixed(1)}dB — ${lowAvg > -6 ? '<span class="good">低音充足饱满，底鼓和贝斯线条清晰</span>' : lowAvg > -20 ? '<span class="good">低频适中</span>' : '<span class="hint">低频偏薄，可能缺乏重量感</span>'}`);
+  lines.push(`<b>中频段（250-2kHz）</b>：平均 ${midAvg.toFixed(1)}dB — ${midAvg > -3 ? '<span class="warn">中频前压，人声和主奏乐器突出</span>' : midAvg > -15 ? '<span class="good">中频均衡自然</span>' : '<span class="hint">中频偏弱</span>'}`);
+  lines.push(`<b>高频段（2kHz+）</b>：平均 ${highAvg.toFixed(1)}dB — ${highAvg > -3 ? '<span class="warn">高频明亮，细节丰富但长时间聆听可能疲劳</span>' : highAvg > -18 ? '<span class="good">高频延伸自然</span>' : '<span class="hint">高频偏暗，细节较少</span>'}`);
+
+  // 整体平衡
+  const loMidDiff = lowAvg - midAvg;
+  if (Math.abs(loMidDiff) < 5) {
+    lines.push(`低频与中频<span class="good">均衡</span>（差 ${loMidDiff.toFixed(1)}dB）。`);
+  } else if (loMidDiff > 0) {
+    lines.push(`低频比中频高 ${loMidDiff.toFixed(1)}dB，<span class="hint">低音偏重</span>，适合电子/嘻哈风格。`);
+  } else {
+    lines.push(`中频比低频高 ${(-loMidDiff).toFixed(1)}dB，<span class="hint">人声/乐器前压</span>，适合流行/摇滚风格。`);
+  }
+
+  return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
+}
+
 // ── 波形智能解读 ──
 function narrateWaveform() {
   const A = STATE.analysis;
@@ -3073,6 +3142,7 @@ function renderAll() {
     ['overview', renderOverview],
     ['spectrum', renderSpectrum],
     ['spectrogram', renderSpectrogramChart],
+    ['soundspectrum', renderSoundSpectrum],
     ['waveform', renderWaveform],
     ['dynamics', renderDynamics],
     ['stereo', renderStereo],
@@ -3097,6 +3167,7 @@ function renderAll() {
     requestAnimationFrame(() => {
       drawSpectrumCanvas();
       drawSpectrogramCanvas();
+      drawSoundSpectrumCanvas();
       drawWaveformCanvas();
       drawPhaseCanvas();
     });
@@ -3196,6 +3267,16 @@ function renderSpectrogramChart() {
     <canvas id="specCanvas" height="320"></canvas>
     <div style="font-size:.65rem;color:var(--fg3);margin-top:2px">时间 →</div>
     <div class="smart-card">${narrateSpectrogram()}</div>
+    </div></div>`;
+}
+
+function renderSoundSpectrum() {
+  return `<div class="card"><div class="card-header">声谱（频段能量）</div><div class="card-body">
+    <canvas id="bandCanvas" height="280"></canvas>
+    <div style="display:flex;justify-content:space-between;font-size:.65rem;color:var(--fg3);margin-top:2px">
+      <span>20Hz</span><span>100Hz</span><span>1kHz</span><span>10kHz</span><span>20kHz</span>
+    </div>
+    <div class="smart-card" style="margin-top:8px">${narrateBandSpectrum()}</div>
     </div></div>`;
 }
 
@@ -3462,6 +3543,70 @@ function drawSpectrogramCanvas() {
   }
 }
 
+function drawSoundSpectrumCanvas() {
+  const canvas = $('#bandCanvas'); if (!canvas) return;
+  const bs = STATE.analysis.bandSpectrum;
+  if (!bs || !bs.values || bs.values.length === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = Math.max(getCW(canvas), 300), H = 280;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
+
+  // 网格
+  ctx.strokeStyle = 'rgba(48,54,61,0.3)'; ctx.lineWidth = 0.5;
+  for (let db = -120; db <= 0; db += 20) {
+    const y = H - ((-db) / 120 * (H - 30)) - 15;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    ctx.fillStyle = '#6e7681'; ctx.font = '8px -apple-system,"Microsoft YaHei",sans-serif';
+    ctx.fillText(db + 'dB', 4, y - 2);
+  }
+
+  const vals = bs.values;
+  const n = vals.length;
+  const barGap = W * 0.02;
+  const barW = (W - barGap * (n + 1)) / n;
+  const peakDB = bs.peakDB;
+  const minDB = Math.max(-120, peakDB - 60); // 动态范围 60dB
+  const dbRange = peakDB - minDB || 1;
+
+  for (let i = 0; i < n; i++) {
+    const db = Math.max(minDB, vals[i]);
+    const t = (db - minDB) / dbRange;
+    const h = t * (H - 35);
+    const x = barGap + i * (barW + barGap);
+    const y = H - 15 - h;
+
+    // 颜色：低频暖色 → 高频冷色
+    const hue = 240 - (i / n) * 240; // 240°(蓝) → 0°(红)
+    const sat = 70 + t * 30;
+    const light = 30 + t * 40;
+    ctx.fillStyle = `hsl(${hue},${sat}%,${light}%)`;
+
+    // 圆角矩形
+    const r = Math.min(3, barW / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + barW - r, y);
+    ctx.quadraticCurveTo(x + barW, y, x + barW, y + r);
+    ctx.lineTo(x + barW, H - 15);
+    ctx.lineTo(x, H - 15);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.fill();
+  }
+
+  // 底部频率标签
+  ctx.fillStyle = '#6e7681'; ctx.font = '8px -apple-system,"Microsoft YaHei",sans-serif';
+  const labelIdx = [0, Math.floor(n/4), Math.floor(n/2), Math.floor(3*n/4), n-1];
+  for (const idx of labelIdx) {
+    const lx = barGap + idx * (barW + barGap) + barW / 2;
+    ctx.fillText(bs.labels[idx], lx - 12, H - 1);
+  }
+}
+
 function drawWaveformCanvas() {
   const canvas = $('#waveCanvas'); if (!canvas) return;
   const wf = STATE.analysis.waveform;
@@ -3536,6 +3681,7 @@ $$('.nav-item').forEach(item => {
       requestAnimationFrame(() => {
         if (this.dataset.section === 'spectrum') drawSpectrumCanvas();
         if (this.dataset.section === 'spectrogram') drawSpectrogramCanvas();
+        if (this.dataset.section === 'soundspectrum') drawSoundSpectrumCanvas();
         if (this.dataset.section === 'waveform') drawWaveformCanvas();
         if (this.dataset.section === 'stereo') drawPhaseCanvas();
       });
