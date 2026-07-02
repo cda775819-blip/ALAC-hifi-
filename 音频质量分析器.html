@@ -2109,7 +2109,7 @@ function computeSpectrogram(data, sr) {
   const hopSize = fftSize / 2;
   const half = fftSize / 2;
   const numFrames = Math.floor((data.length - fftSize) / hopSize) + 1;
-  const maxFrames = 600;
+  const maxFrames = 1200;
   const step = Math.max(1, Math.floor(numFrames / maxFrames));
   const actualFrames = Math.floor((numFrames - 1) / step) + 1;
   const spec = [];
@@ -3479,10 +3479,10 @@ function drawWaveformCanvas() {
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
 
   ctx.fillStyle = 'rgba(88,166,255,.5)';
-  const barW = Math.max(1, W / wf.length);
+  const barW = W / wf.length;
   for (let i = 0; i < wf.length; i++) {
     const h = wf[i] * mid * 0.9;
-    ctx.fillRect(i * barW, mid - h, Math.max(1, barW - 0.5), h * 2);
+    ctx.fillRect(i * barW, mid - h, Math.max(0.5, barW * 0.85), h * 2);
   }
 
   ctx.fillStyle = '#6e7681'; ctx.font = '9px -apple-system,"Microsoft YaHei",sans-serif';
