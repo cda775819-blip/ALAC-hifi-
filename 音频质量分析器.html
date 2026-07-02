@@ -3425,7 +3425,7 @@ function drawSpectrogramCanvas() {
   const cols = data.length, rows = fAxis.length;
   const imgData = ctx.createImageData(bw, bh);
   const raw = imgData.data;
-  const maxFreqIdx = Math.min(rows - 1, Math.floor(rows * Math.min(STATE.sampleRate / 2000, 24) / (fAxis[rows - 1] || 1)));
+  const maxFreqIdx = Math.min(rows - 1, Math.floor(rows * Math.min(STATE.sampleRate / 2, 24000) / (fAxis[rows - 1] || 1)));
 
   // 找范围
   const allVals = [];
