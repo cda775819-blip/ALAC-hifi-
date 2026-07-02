@@ -723,7 +723,8 @@ function parseFormatFromBytes(bytes) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  策略⑦: 内嵌 MP4 解析器 + WebCodecs (0 网络, 纯本地)
+//  MP4/ISO BMFF 解析器 — Box Tree, Sample Table, ALAC Config
+//  供 WebCodecs / Pure JS ALAC / 格式检测共用
 // ═══════════════════════════════════════════════════════════════
 
 function parseMP4BoxTree(rawBytes) {
@@ -739,10 +740,11 @@ function parseMP4BoxTree(rawBytes) {
   function parseBox(parentObj) {
      while (pos + 8 <= len) {
        let size = readU32(pos);
-       const type = readStr(pos + 4, 4);
-       let headerSize = 8;
-       if (size === 1) { size = Number((BigInt(readU32(pos + 8)) << 32n) | BigInt(readU32(pos + 12))); headerSize = 16; }
-       if (size === 0 || size < headerSize || pos + size > len) break;
+      const type = readStr(pos + 4, 4);
+      let headerSize = 8;
+      if (size === 1) { size = Number((BigInt(readU32(pos + 8)) << 32n) | BigInt(readU32(pos + 12))); headerSize = 16; }
+      if (size === 0) size = len - pos;  // 扩展到文件末尾
+      if (size < headerSize || pos + size > len) break;
 
        const contentStart = pos + headerSize;
        const contentEnd = pos + size;
@@ -966,146 +968,144 @@ function extractASCFromESDS(esds) {
   return null;
 }
 
+// ── ALAC Config 解析器 ──
+function parseALACConfig(config) {
+  if (!config || config.length < 24) return null;
+  const off = config.length >= 28 ? 4 : 0;  // 跳过可能的 FullBox header
+  const frameLen = ((config[off]<<24)|(config[off+1]<<16)|(config[off+2]<<8)|config[off+3]) || 4096;
+  return {
+    frameLength: frameLen,
+    compatibleVersion: config[off+4],
+    bitDepth: config[off+5] || 16,
+    pb: config[off+6], mb: config[off+7], kb: config[off+8],
+    channels: config[off+9],
+    maxRun: (config[off+10]<<8)|config[off+11],
+    maxFrameBytes: (config[off+12]<<24)|(config[off+13]<<16)|(config[off+14]<<8)|config[off+15],
+    avgBitRate: (config[off+16]<<24)|(config[off+17]<<16)|(config[off+18]<<8)|config[off+19],
+    sampleRate: (config[off+20]<<24)|(config[off+21]<<16)|(config[off+22]<<8)|config[off+23],
+    rawConfig: config, off,
+  };
+}
+
 function parseSampleTable(rawBytes, tree, info) {
-  // 从已解析的 box 数据读取样本表
-  const data = (box) => box; // box 就是 Uint8Array
+  const rdU32 = (arr,p) => (arr[p]<<24)|(arr[p+1]<<16)|(arr[p+2]<<8)|arr[p+3];
 
-  function readU32(arr, p) {
-    return (arr[p] << 24) | (arr[p + 1] << 16) | (arr[p + 2] << 8) | arr[p + 3];
-  }
-
-  // stsz
+  // ── 1. stsz: sample sizes ──
   const sampleSizes = [];
   const stsz = info.stsz;
-  D.info('WC', `  stsz: ${stsz ? stsz.length+'B' : 'null'}`);
   if (stsz && stsz.length >= 12) {
-    const sampleSize = readU32(stsz, 4);
-    const entryCount = readU32(stsz, 8);
-    D.info('WC', `  stsz: sampleSize=${sampleSize} entries=${entryCount}`);
-    if (sampleSize === 0) {
-      for (let i = 0; i < Math.min(entryCount, 100000); i++) {
-        sampleSizes.push(readU32(stsz, 12 + i * 4));
-      }
-    } else {
-      for (let i = 0; i < Math.min(entryCount, 100000); i++) sampleSizes.push(sampleSize);
-    }
+    const ss = rdU32(stsz,4), cnt = rdU32(stsz,8);
+    D.info('WC', `  stsz: sampleSize=${ss} entries=${cnt}`);
+    for (let i = 0; i < Math.min(cnt, 200000); i++)
+      sampleSizes.push(ss === 0 ? rdU32(stsz,12+i*4) : ss);
   }
 
-  // stco / co64
+  // ── 2. stco/co64: chunk offsets ──
   const chunkOffsets = [];
   const co = info.stco || info.co64;
-  D.info('WC', `  ${info.stco?'stco':'co64'}: ${co ? co.length+'B' : 'null'}`);
+  const is64 = !!info.co64;
   if (co && co.length >= 8) {
-    const entryCount = readU32(co, 4);
-    D.info('WC', `  chunks: ${entryCount}`);
-    for (let i = 0; i < Math.min(entryCount, 100000); i++) {
-      chunkOffsets.push(readU32(co, 8 + i * 4));
+    const cnt = rdU32(co,4);
+    D.info('WC', `  ${is64?'co64':'stco'}: ${cnt} chunks`);
+    for (let i = 0; i < Math.min(cnt, 100000); i++) {
+      if (is64) {
+        const hi = rdU32(co,8+i*8), lo = rdU32(co,12+i*8);
+        chunkOffsets.push(Number((BigInt(hi)<<32n)|BigInt(lo)));
+      } else {
+        chunkOffsets.push(rdU32(co,8+i*4));
+      }
     }
   }
-  // stsz 回退: 尝试 stz2 (Compact Sample Size Box, 4/8/16-bit entries)
+
+  // ── 3. stz2: compact sample sizes (fallback) ──
   if (sampleSizes.length === 0) {
     const stz2 = info.stz2;
-    D.info('WC', `  stz2: ${stz2 ? stz2.length+'B' : 'null'}`);
     if (stz2 && stz2.length >= 12) {
-      const fieldSize = stz2[7]; // byte 7: field size (4, 8, or 16)
-      const sampleCount = readU32(stz2, 8);
-      D.info('WC', `  stz2: fieldSize=${fieldSize} samples=${sampleCount}`);
-      if (fieldSize === 8 && sampleCount > 0 && stz2.length >= 12 + sampleCount) {
-        for (let i = 0; i < sampleCount; i++) sampleSizes.push(stz2[12 + i]);
-      } else if (fieldSize === 16 && sampleCount > 0 && stz2.length >= 12 + sampleCount * 2) {
-        for (let i = 0; i < sampleCount; i++) sampleSizes.push((stz2[12 + i * 2] << 8) | stz2[13 + i * 2]);
-      } else if (fieldSize === 4 && sampleCount > 0 && stz2.length >= 12 + Math.ceil(sampleCount / 2)) {
-        for (let i = 0; i < sampleCount; i++) {
-          const b = stz2[12 + Math.floor(i / 2)];
-          sampleSizes.push(i % 2 === 0 ? (b >> 4) & 0xF : b & 0xF);
-        }
-      }
+      const fs = stz2[7], cnt = rdU32(stz2,8);
+      D.info('WC', `  stz2: fieldSize=${fs} samples=${cnt}`);
+      if (fs === 8)   for (let i=0;i<cnt;i++) sampleSizes.push(stz2[12+i]);
+      else if (fs===16) for (let i=0;i<cnt;i++) sampleSizes.push((stz2[12+i*2]<<8)|stz2[13+i*2]);
+      else if (fs===4)  for (let i=0;i<cnt;i++) { const b=stz2[12+(i>>1)]; sampleSizes.push(i&1?b&0xF:b>>4); }
     }
   }
 
-  D.info('WC', `  sampleSizes.length=${sampleSizes.length} chunkOffsets.length=${chunkOffsets.length}`);
+  D.info('WC', `  sampleSizes=${sampleSizes.length} chunks=${chunkOffsets.length}`);
 
-  // stsc
-  const stscEntries = [];
+  // ── 4. stsc: sample-to-chunk, 预展开为 per-chunk 数组 ──
+  const samplesPerChunk = [];  // indexed by chunk index (0-based)
   const stsc = info.stsc;
   if (stsc && stsc.length >= 8) {
-    const entryCount = readU32(stsc, 4);
-    for (let i = 0; i < Math.min(entryCount, 1000); i++) {
-      stscEntries.push({
-        firstChunk: readU32(stsc, 8 + i * 12),
-        samplesPerChunk: readU32(stsc, 12 + i * 12),
-      });
+    const cnt = rdU32(stsc,4);
+    const maxChunks = chunkOffsets.length || sampleSizes.length || 1000000;
+    for (let i = 0; i < cnt; i++) {
+      const fc = rdU32(stsc,8+i*12) - 1;  // 0-based firstChunk
+      const spc = rdU32(stsc,12+i*12);
+      // stsc entry covers chunks from fc to nextEntry.firstChunk-1 (or end)
+      const nextFc = (i+1 < cnt) ? rdU32(stsc,8+(i+1)*12) - 1 : maxChunks;
+      const end = Math.min(nextFc, maxChunks);
+      for (let c = fc; c < end; c++) samplesPerChunk[c] = spc;
     }
   }
 
-  // 回退: stsz/stz2 均无数据时，用 stts 推算总帧数，从 mdat 估算每帧大小
-  if (sampleSizes.length === 0 && chunkOffsets.length > 0) {
-    let totalFrames = 0;
+  // ── 5. stts: total frame count (fallback) ──
+  let totalFramesEst = sampleSizes.length;
+  if (totalFramesEst === 0) {
     const stts = info.stts;
-    D.info('WC', `  stts: ${stts ? stts.length+'B' : 'null'}`);
     if (stts && stts.length >= 8) {
-      const entryCount = readU32(stts, 4);
-      for (let i = 0; i < Math.min(entryCount, 10000); i++) {
-        totalFrames += readU32(stts, 8 + i * 8);
+      const cnt = rdU32(stts,4);
+      for (let i=0;i<Math.min(cnt,10000);i++) totalFramesEst += rdU32(stts,8+i*8);
+    }
+    if (totalFramesEst === 0 && info.mdhdDuration && info.mdhdTimescale && info.sampleRate) {
+      const cfg = parseALACConfig(info.config);
+      if (cfg) {
+        const durSec = info.mdhdDuration / info.mdhdTimescale;
+        totalFramesEst = Math.ceil(durSec * info.sampleRate / cfg.frameLength);
+        D.info('WC', `  mdhd fallback: dur=${durSec.toFixed(2)}s → ${totalFramesEst} frames`);
       }
     }
-    // stts 也无数据 → 用 mdhd duration 推算
-    if (totalFrames === 0 && info.mdhdDuration && info.mdhdTimescale && info.sampleRate && info.config && info.config.length >= 24) {
-      const off = info.config.length >= 28 ? 4 : 0;
-      const frameLength = ((info.config[off] << 24) | (info.config[off+1] << 16) | (info.config[off+2] << 8) | info.config[off+3]) || 4096;
-      const durSec = info.mdhdDuration / info.mdhdTimescale;
-      const totalSamples = Math.round(durSec * info.sampleRate);
-      totalFrames = Math.ceil(totalSamples / frameLength);
-      D.info('WC', `  mdhd: dur=${durSec.toFixed(3)}s timescale=${info.mdhdTimescale} totalSamples=${totalSamples} frameLen=${frameLength} → ${totalFrames}frames`);
-    }
-    if (totalFrames > 0) D.info('WC', `  stts->totalFrames=${totalFrames}`);
+  }
+  if (totalFramesEst === 0 && chunkOffsets.length > 0) {
+    // 最后手段: 文件大小估算
+    const audioEnd = (tree.altDataOffset >= 0) ? tree.altDataOffset + tree.altDataSize
+                  : tree.mdatOffset + tree.mdatSize;
+    totalFramesEst = Math.max(1, Math.floor((audioEnd - chunkOffsets[0]) / 200));
+    D.warn('WC', `  fallback估算: ~${totalFramesEst} frames`);
+  }
 
-    if (totalFrames > 0 && totalFrames < 200000) {
-      // 计算 mdat 中音频数据的总大小
-      const mdatEnd = tree.mdatOffset + tree.mdatSize;
-      const audioStart = chunkOffsets[0];
-      const totalAudioBytes = mdatEnd - audioStart;
-      const avgSize = Math.floor(totalAudioBytes / totalFrames);
-      D.warn('WC', `  回退模式: totalFrames=${totalFrames} audioBytes=${totalAudioBytes} avgFrameSize=${avgSize}B`);
-      // 每帧用平均大小，最后一帧吸收余数
-      for (let i = 0; i < totalFrames - 1; i++) sampleSizes.push(avgSize);
-      sampleSizes.push(totalAudioBytes - avgSize * (totalFrames - 1));
-    }
+  // ── 6. 回退: stsz/stz2 无数据但知道帧数 → 平均分配 ──
+  if (sampleSizes.length === 0 && chunkOffsets.length > 0 && totalFramesEst > 0 && totalFramesEst < 200000) {
+    const audioEnd = (tree.altDataOffset >= 0) ? tree.altDataOffset + tree.altDataSize
+                  : tree.mdatOffset + tree.mdatSize;
+    const totalBytes = audioEnd - chunkOffsets[0];
+    const avg = Math.floor(totalBytes / totalFramesEst);
+    D.warn('WC', `  回退: ${totalFramesEst}帧 × ~${avg}B = ${totalBytes}B`);
+    for (let i=0;i<totalFramesEst-1;i++) sampleSizes.push(avg);
+    sampleSizes.push(totalBytes - avg*(totalFramesEst-1));
   }
 
   if (sampleSizes.length === 0 || chunkOffsets.length === 0) return [];
+  if (totalFramesEst > 0) D.info('WC', `  totalFrames=${totalFramesEst}`);
 
-  // 计算每帧偏移
+  // ── 7. 组装帧数组 ──
   const frames = [];
   const sr = info.sampleRate || 44100;
-  let chunkIdx = 0, sampleInChunk = 0;
-  let ts = 0;
+  let chunkIdx = 0, sampleInChunk = 0, ts = 0;
 
   for (let s = 0; s < sampleSizes.length; s++) {
-    let spc = 1;
-    for (let e = stscEntries.length - 1; e >= 0; e--) {
-      if (chunkIdx + 1 >= stscEntries[e].firstChunk) { spc = stscEntries[e].samplesPerChunk; break; }
-    }
+    const spc = samplesPerChunk[chunkIdx] || 1;
     if (sampleInChunk === 0 && chunkIdx < chunkOffsets.length) {
       const off = chunkOffsets[chunkIdx];
-      if (off > 0 && off + sampleSizes[s] <= rawBytes.length) {
+      if (off > 0 && off + sampleSizes[s] <= rawBytes.length)
         frames.push({ offset: off, size: sampleSizes[s], timestamp: ts });
-      }
-    } else {
-      // 同一 chunk 后续帧
-      if (frames.length > 0) {
-        const prev = frames[frames.length - 1];
-        const off = prev.offset + prev.size;
-        if (off + sampleSizes[s] <= rawBytes.length) {
-          frames.push({ offset: off, size: sampleSizes[s], timestamp: ts });
-        }
-      }
+    } else if (frames.length > 0) {
+      const prev = frames[frames.length-1];
+      const off = prev.offset + prev.size;
+      if (off + sampleSizes[s] <= rawBytes.length)
+        frames.push({ offset: off, size: sampleSizes[s], timestamp: ts });
     }
     ts += Math.round(1024000000 / sr);
-    sampleInChunk++;
-    if (sampleInChunk >= spc) { chunkIdx++; sampleInChunk = 0; }
+    if (++sampleInChunk >= spc) { chunkIdx++; sampleInChunk = 0; }
   }
-
   return frames;
 }
 
@@ -1230,237 +1230,141 @@ function createALACBitReader(data, offset, length) {
       while (bitCount < n && pos < end) { bitBuf = (bitBuf << 8) | data[pos++]; bitCount += 8; }
       return bitCount >= n;
     },
-    readBit() { this.fill(1); const b = (bitBuf >> (bitCount - 1)) & 1; bitCount--; return b; },
-    readBits(n) { this.fill(n); const v = (bitBuf >> (bitCount - n)) & ((1 << n) - 1); bitCount -= n; return v; },
-    readSigned(n) { let v = this.readBits(n); if (v & (1 << (n - 1))) v -= 1 << n; return v; },
-    skipBits(n) { while (n > 0) { const s = Math.min(n, bitCount); bitCount -= s; n -= s; if (n > 0 && pos < end) { pos++; n -= 8 - bitCount; bitCount = 0; } } },
-    bytePos() { return pos - (bitCount > 0 ? Math.ceil(bitCount / 8) : 0) - offset; },
-    rawPos() { return pos - offset; },  // 已读取的原始字节数（含未消费 bit 所在的字节）
+    readBit() { this.fill(1); return (bitBuf >> --bitCount) & 1; },
+    readBits(n) { this.fill(n); return (bitBuf >> (bitCount -= n)) & ((1 << n) - 1); },
+    readSigned(n) { const v = this.readBits(n); return v & (1 << (n-1)) ? v - (1 << n) : v; },
+    skipBits(n) {
+      while (n > 0) {
+        const s = Math.min(n, bitCount);
+        bitCount -= s; n -= s;
+        if (n > 0 && pos < end) { bitBuf = 0; bitCount = 0; pos += Math.floor(n / 8); n %= 8; }
+      }
+    },
+    alignToByte() { bitCount = 0; bitBuf = 0; },  // ALAC 帧边界必须字节对齐
+    bytePos() { return pos - offset - (bitCount > 0 ? 1 : 0); },
+    rawPos() { return pos - offset; },
   };
 }
 
+// ── ALAC 单帧解码器 (共享核心, 消除 70% 重复代码) ──
+// 解码一个 ALAC 帧（所有通道）。reader 已指向帧起始位置。
+// 返回 { channelSamples: [Int32Array,...], samplesPerChannel: number }
+function decodeOneALACFrame(reader, cfg, channels) {
+  const fc = cfg.frameLength, bd = cfg.bitDepth;
+  const chSamples = [];
+
+  for (let ch = 0; ch < channels; ch++) {
+    const predType = reader.readBits(4);
+    const predQuant = reader.readBits(4);
+    reader.readBits(3);  // riceModifier
+    const predOrder = reader.readBits(5);
+
+    const coefs = new Int32Array(predOrder);
+    for (let i = 0; i < predOrder; i++) coefs[i] = reader.readSigned(16);
+
+    const samples = new Int32Array(fc);
+
+    // ── Rice 解码辅助函数 ──
+    const riceDecode = (k, history, outFn) => {
+      for (let i = 0; i < fc; i++) {
+        let lz = 0;
+        while (reader.readBit() === 0) { lz++; if (lz > cfg.maxRun + 64) break; }
+        let v = lz < Math.min(cfg.maxRun, 255)
+          ? (lz << k) | (k > 0 ? reader.readBits(k) : 0)
+          : reader.readBits(bd);
+        if (v !== 0 && reader.readBit() === 1) v = -v;
+        outFn(i, v);
+        history += (v < 0) ? -v : v;
+        if (history >= (128 << cfg.mb) && k < 31) { k++; history -= (128 << cfg.mb); }
+      }
+    };
+
+    if (predType === 15) {
+      for (let i = 0; i < fc; i++) samples[i] = reader.readSigned(bd);
+    } else if (predType === 14) {
+      riceDecode(cfg.kb, 0, (i, v) => { samples[i] = v; });
+    } else {
+      riceDecode(cfg.kb, 0, (i, r) => {
+        let pred = 0;
+        for (let j = 0; j < predOrder && i - 1 - j >= 0; j++) pred += coefs[j] * samples[i - 1 - j];
+        samples[i] = (pred >> predQuant) + r;
+      });
+    }
+    chSamples.push(samples);
+  }
+
+  return { channelSamples: chSamples, samplesPerChannel: fc };
+}
+
+// ── 写入交错 PCM 输出 ──
+function writeInterleavedPCM(output, outputPos, chSamples, channels, maxVal) {
+  const fsc = chSamples[0].length;
+  let pos = outputPos;
+  for (let s = 0; s < fsc; s++) {
+    for (let ch = 0; ch < channels; ch++) {
+      if (pos + ch >= output.length) break;
+      const v = chSamples[ch][s] / maxVal;
+      output[pos + ch] = isFinite(v) ? v : 0;
+    }
+    pos += channels;
+  }
+  return pos;
+}
+
 function decodeALACFramesToPCM(frameDataList, config, sampleRate, channels) {
-  // 解析 ALACSpecificConfig (magic cookie)
-  // 部分 muxer 在前面加了 4 字节 FullBox header (version+flags)，此时 config≥28B
-  // 部分 muxer 不加 header，config=24B（ALACSpecificConfig 最小尺寸）
-  if (!config || config.length < 24) throw new Error('ALAC config too short: ' + (config ? config.length : 0));
-  const off = config.length >= 28 ? 4 : 0;  // 有 FullBox header 时跳过 4 字节
+  const cfg = parseALACConfig(config);
+  if (!cfg) throw new Error('ALAC config 无效 (需≥24B, 实际' + (config ? config.length : 0) + 'B)');
+  D.info('ALAC', `decoder: frameLen=${cfg.frameLength} bitDepth=${cfg.bitDepth} ch=${channels} pb=${cfg.pb} mb=${cfg.mb} kb=${cfg.kb} maxRun=${cfg.maxRun} sr=${cfg.sampleRate}`);
 
-  const frameLengthRaw = (config[off] << 24) | (config[off+1] << 16) | (config[off+2] << 8) | config[off+3];
-  const frameLength = frameLengthRaw > 0 ? frameLengthRaw : 4096;
-  const compatibleVersion = config[off+4];
-  const bitDepth = config[off+5] || 16;
-  const pb = config[off+6];    // predictor history (max prediction order)
-  const mb = config[off+7];    // rice history multiplier
-  const kb = config[off+8];    // rice initial history
-  const numChannelsInConfig = config[off+9];
-  const maxRun = (config[off+10] << 8) | config[off+11];
-  const maxFrameBytes = (config[off+12] << 24) | (config[off+13] << 16) | (config[off+14] << 8) | config[off+15];
-  const avgBitRate = (config[off+16] << 24) | (config[off+17] << 16) | (config[off+18] << 8) | config[off+19];
-  const configSampleRate = (config[off+20] << 24) | (config[off+21] << 16) | (config[off+22] << 8) | config[off+23];
-
-  D.info('ALAC', `decoder: frameLen=${frameLength} bitDepth=${bitDepth} ch=${channels} pb=${pb} mb=${mb} kb=${kb} maxRun=${maxRun} sr=${configSampleRate}`);
-
-  const actualSampleRate = sampleRate || configSampleRate || 44100;
-  const totalFrames = frameDataList.length;
-  
-  // 预估总采样数
-  let totalSamplesEst = totalFrames * frameLength;
-  const output = new Float32Array(totalSamplesEst * channels);
+  const sr = sampleRate || cfg.sampleRate || 44100;
+  const maxVal = 1 << (cfg.bitDepth - 1);
+  const totalSamples = frameDataList.length * cfg.frameLength * channels;
+  if (!isFinite(totalSamples) || totalSamples <= 0 || totalSamples > 500000000) {
+    throw new Error(`输出缓冲区大小异常: ${totalSamples} (frames=${frameDataList.length} frameLen=${cfg.frameLength} ch=${channels})`);
+  }
+  const output = new Float32Array(totalSamples);
   let outputPos = 0;
 
-  // 解码每个帧
-  for (let fi = 0; fi < totalFrames; fi++) {
+  for (let fi = 0; fi < frameDataList.length; fi++) {
     const fd = frameDataList[fi];
-    const reader = createALACBitReader(fd.data, 0, fd.size);
-    
-    // 每通道单独的子帧
-    const channelSamples = [];
-    
-    for (let ch = 0; ch < channels; ch++) {
-      const predictionType = reader.readBits(4);
-      const predictionQuant = reader.readBits(4);
-      const riceModifier = reader.readBits(3);
-      const predictorOrder = reader.readBits(5);
-      
-      // 读取预测系数
-      const predictorCoefs = new Int32Array(predictorOrder);
-      for (let i = 0; i < predictorOrder; i++) {
-        predictorCoefs[i] = reader.readSigned(16);
+    if (fd.size < 4) { D.warn('ALAC', `跳过帧${fi}: 太小 (${fd.size}B)`); continue; }
+    try {
+      const reader = createALACBitReader(fd.data, 0, fd.size);
+      const result = decodeOneALACFrame(reader, cfg, channels);
+      const nextPos = writeInterleavedPCM(output, outputPos, result.channelSamples, channels, maxVal);
+      if (!isFinite(nextPos) || nextPos < outputPos) {
+        D.warn('ALAC', `帧${fi}输出位置异常: ${outputPos} → ${nextPos}`);
+        break;
       }
-      
-      // 当前帧的实际采样数 (最后一帧可能少于 frameLength)
-      let samplesThisFrame = frameLength;
-      
-      const samples = new Int32Array(samplesThisFrame);
-      
-      if (predictionType === 15) {
-        // 类型 15: 无压缩，直接读取有符号样本
-        for (let i = 0; i < samplesThisFrame; i++) {
-          samples[i] = reader.readSigned(bitDepth);
-        }
-      } else if (predictionType === 14) {
-        // 类型 14: 无预测，仅 Rice 解码
-        let k = kb;
-        let history = 0;
-
-        for (let i = 0; i < samplesThisFrame; i++) {
-          // Rice 解码: unary quotient + k-bit remainder
-          let leadingZeros = 0;
-          while (reader.readBit() === 0) {
-            leadingZeros++;
-            if (leadingZeros > maxRun + 64) break; // 安全上限
-          }
-
-          let value;
-          if (leadingZeros < Math.min(maxRun, 255)) {
-            value = (leadingZeros << k) | (k > 0 ? reader.readBits(k) : 0);
-          } else {
-            value = reader.readBits(bitDepth); // escape
-          }
-
-          if (value !== 0 && reader.readBit() === 1) value = -value;
-
-          samples[i] = value;
-
-          // 更新 Rice 参数 k（基于 |value| 累积）
-          history += (value < 0) ? -value : value;
-          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
-        }
-      } else {
-        // 类型 0-13: 线性预测 + Rice 解码
-        let k = kb;
-        let history = 0;
-
-        for (let i = 0; i < samplesThisFrame; i++) {
-          // 预测值
-          let prediction = 0;
-          for (let j = 0; j < predictorOrder && i - 1 - j >= 0; j++) {
-            prediction += predictorCoefs[j] * samples[i - 1 - j];
-          }
-          prediction >>= predictionQuant;
-
-          // Rice 解码残差
-          let leadingZeros = 0;
-          while (reader.readBit() === 0) {
-            leadingZeros++;
-            if (leadingZeros > maxRun + 64) break; // 安全上限
-          }
-
-          let residual;
-          if (leadingZeros < Math.min(maxRun, 255)) {
-            residual = (leadingZeros << k) | (k > 0 ? reader.readBits(k) : 0);
-          } else {
-            residual = reader.readBits(bitDepth);
-          }
-
-          if (residual !== 0 && reader.readBit() === 1) residual = -residual;
-
-          const sample = prediction + residual;
-          samples[i] = sample;
-
-          // 更新 k（基于 |residual| 累积）
-          history += (residual < 0) ? -residual : residual;
-          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
-        }
-      }
-      
-      channelSamples.push(samples);
-    }
-    
-    // 将解交织的通道样本写入输出 buffer
-    const frameSampleCount = channelSamples[0].length;
-    const maxVal = 1 << (bitDepth - 1);
-    
-    for (let s = 0; s < frameSampleCount; s++) {
-      for (let ch = 0; ch < channels; ch++) {
-        if (outputPos + ch >= output.length) break;
-        const val = channelSamples[ch][s] / maxVal;
-        output[outputPos + ch] = isFinite(val) ? val : 0;
-      }
-      outputPos += channels;
+      outputPos = nextPos;
+    } catch (e) {
+      D.warn('ALAC', `帧${fi}解码异常: ${e.message} (size=${fd.size})`);
+      break;
     }
   }
-  
-  // 裁剪到实际大小
-  D.ok('ALAC', `解码完成: ${outputPos / channels} 采样点, ${(outputPos / channels / actualSampleRate).toFixed(2)}s`);
+
+  D.ok('ALAC', `解码完成: ${outputPos / channels} 采样点, ${(outputPos / channels / sr).toFixed(2)}s`);
   return output.subarray(0, outputPos);
 }
 
 // 从连续 buffer 顺序解码 ALAC 帧（不需要预先知道帧边界）
 function decodeALACSequential(rawBytes, audioStart, audioEnd, config, sampleRate, channels, totalFrames, frameLength) {
-  if (!config || config.length < 24) throw new Error('ALAC config too short for sequential');
-  const off = config.length >= 28 ? 4 : 0;
-  const bitDepth = config[off+5] || 16;
-  const pb = config[off+6], mb = config[off+7], kb = config[off+8];
-  const maxRun = (config[off+10] << 8) | config[off+11];
-  const maxVal = 1 << (bitDepth - 1);
+  const cfg = parseALACConfig(config);
+  if (!cfg) throw new Error('ALAC config 无效');
 
-  const totalSamplesEst = totalFrames * frameLength * channels;
-  const output = new Float32Array(totalSamplesEst);
+  const maxVal = 1 << (cfg.bitDepth - 1);
+  const output = new Float32Array(totalFrames * cfg.frameLength * channels);
   let outputPos = 0;
   let reader = createALACBitReader(rawBytes, audioStart, audioEnd - audioStart);
 
   for (let fi = 0; fi < totalFrames; fi++) {
-    if (reader.bytePos() + 1 >= audioEnd - audioStart) break; // buffer exhausted
+    if (reader.bytePos() + 8 >= audioEnd - audioStart) break;
 
-    // 解码每通道子帧
-    const channelSamples = [];
-    for (let ch = 0; ch < channels; ch++) {
-      if (reader.bytePos() + 1 >= audioEnd - audioStart) break;
-      const predictionType = reader.readBits(4);
-      const predictionQuant = reader.readBits(4);
-      const riceModifier = reader.readBits(3);
-      const predictorOrder = reader.readBits(5);
-      const predictorCoefs = new Int32Array(predictorOrder);
-      for (let i = 0; i < predictorOrder; i++) predictorCoefs[i] = reader.readSigned(16);
+    const result = decodeOneALACFrame(reader, cfg, channels);
+    outputPos = writeInterleavedPCM(output, outputPos, result.channelSamples, channels, maxVal);
 
-      const samples = new Int32Array(frameLength);
-      if (predictionType === 15) {
-        for (let i = 0; i < frameLength; i++) samples[i] = reader.readSigned(bitDepth);
-      } else if (predictionType === 14) {
-        let k = kb, history = 0;
-        for (let i = 0; i < frameLength; i++) {
-          let lz = 0;
-          while (reader.readBit() === 0) { lz++; if (lz > maxRun + 64) break; }
-          let v = lz < Math.min(maxRun, 255) ? (lz << k) | (k > 0 ? reader.readBits(k) : 0) : reader.readBits(bitDepth);
-          if (v !== 0 && reader.readBit() === 1) v = -v;
-          samples[i] = v;
-          history += (v < 0) ? -v : v;
-          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
-        }
-      } else {
-        let k = kb, history = 0;
-        for (let i = 0; i < frameLength; i++) {
-          let pred = 0;
-          for (let j = 0; j < predictorOrder && i - 1 - j >= 0; j++) pred += predictorCoefs[j] * samples[i - 1 - j];
-          pred >>= predictionQuant;
-          let lz = 0;
-          while (reader.readBit() === 0) { lz++; if (lz > maxRun + 64) break; }
-          let r = lz < Math.min(maxRun, 255) ? (lz << k) | (k > 0 ? reader.readBits(k) : 0) : reader.readBits(bitDepth);
-          if (r !== 0 && reader.readBit() === 1) r = -r;
-          samples[i] = pred + r;
-          history += (r < 0) ? -r : r;
-          if (history >= (128 << mb) && k < 31) { k++; history -= (128 << mb); }
-        }
-      }
-      channelSamples.push(samples);
-    }
-
-    // 写入输出 buffer（交错）
-    if (channelSamples.length === channels) {
-      const fsc = channelSamples[0].length;
-      for (let s = 0; s < fsc; s++) {
-        for (let ch = 0; ch < channels; ch++) {
-          if (outputPos + ch >= output.length) break;
-          const val = channelSamples[ch][s] / maxVal;
-          output[outputPos + ch] = isFinite(val) ? val : 0;
-        }
-        outputPos += channels;
-      }
-    }
-
-    // 对齐到字节边界，准备下一帧（MP4 帧数据总是字节对齐）
+    // 帧边界字节对齐: 丢弃当前字节未消费的 bits，从下一字节开始
+    reader.alignToByte();
     const consumed = reader.rawPos();
     if (consumed <= 0 || audioStart + consumed >= audioEnd) break;
     reader = createALACBitReader(rawBytes, audioStart + consumed, audioEnd - audioStart - consumed);
@@ -1493,7 +1397,13 @@ async function decodeALACWithPureJS(rawBytes) {
   if (info.codec !== 'alac') throw new Error('非 ALAC 编码: ' + info.codec);
   if (!info.config || info.config.length < 24) throw new Error('ALAC config 无效 (需≥24B, 实际' + (info.config ? info.config.length : 0) + 'B)');
 
+  // 诊断: 打印 config hex 和 parseALACConfig 结果
+  const alacCfg = parseALACConfig(info.config);
+  D.info('ALAC', `config解析: frameLen=${alacCfg.frameLength} bitDepth=${alacCfg.bitDepth} ch=${alacCfg.channels} pb=${alacCfg.pb} mb=${alacCfg.mb} kb=${alacCfg.kb} maxRun=${alacCfg.maxRun} maxFrameBytes=${alacCfg.maxFrameBytes} avgBitRate=${alacCfg.avgBitRate} sr=${alacCfg.sampleRate} off=${alacCfg.off}`);
+  D.info('ALAC', `config hex前28B: [${Array.from(info.config.subarray(0, Math.min(28, info.config.length))).map(b => b.toString(16).padStart(2,'0')).join(' ')}]`);
+
   const frames = parseSampleTable(rawBytes, tree, info);
+  D.info('ALAC', `帧解析结果: ${frames.length} 帧, 首帧 off=${frames.length>0?frames[0].offset:'NA'} size=${frames.length>0?frames[0].size:'NA'}, 末帧 off=${frames.length>0?frames[frames.length-1].offset:'NA'} size=${frames.length>0?frames[frames.length-1].size:'NA'}`);
 
   let pcm;
   if (frames.length > 0) {
@@ -1502,9 +1412,43 @@ async function decodeALACWithPureJS(rawBytes) {
       data: rawBytes.subarray(f.offset, f.offset + f.size),
       size: f.size,
     }));
-    pcm = decodeALACFramesToPCM(frameDataList, info.config, info.sampleRate, info.channels);
+    D.info('ALAC', `frameDataList: ${frameDataList.length}项, 首项size=${frameDataList[0].size}, data真实长度=${frameDataList[0].data.length}`);
+    // 验证前几帧数据非空
+    let emptyFrames = 0;
+    for (let i = 0; i < Math.min(5, frameDataList.length); i++) {
+      if (frameDataList[i].data.length === 0) emptyFrames++;
+    }
+    if (emptyFrames > 0) D.warn('ALAC', `前5帧中有${emptyFrames}帧数据为空!`);
+    try {
+      pcm = decodeALACFramesToPCM(frameDataList, info.config, info.sampleRate, info.channels);
+    } catch (e) {
+      D.err('ALAC', `decodeALACFramesToPCM 失败: ${e.message} (frameCount=${frameDataList.length})`);
+      // 尝试只解码前10帧来定位问题
+      try {
+        D.info('ALAC', '尝试只解码前10帧...');
+        const subset = frameDataList.slice(0, 10);
+        const pcmSub = decodeALACFramesToPCM(subset, info.config, info.sampleRate, info.channels);
+        D.ok('ALAC', `前10帧解码成功: ${pcmSub.length} 采样`);
+        // 问题在后面帧 → 逐帧二分查找
+        throw new Error('后续帧数据损坏, 前10帧正常');
+      } catch (e2) {
+        D.err('ALAC', `前10帧也失败: ${e2.message}`);
+        // 尝试单帧
+        try {
+          const single = [frameDataList[0]];
+          const pcm1 = decodeALACFramesToPCM(single, info.config, info.sampleRate, info.channels);
+          D.ok('ALAC', `单帧解码成功: ${pcm1.length} 采样`);
+        } catch (e3) {
+          D.err('ALAC', `单帧也失败: ${e3.message} (size=${frameDataList[0].size})`);
+        }
+        throw e; // 重新抛出原始错误
+      }
+      throw e;
+    }
   } else {
     // 样本表全空 → 顺序解码模式：从 mdat 连续读取帧，解码器自动定位帧边界
+    const cfg = parseALACConfig(info.config);
+    const frameLen = cfg ? cfg.frameLength : 4096;
     let audioStart = tree.mdatOffset || 0;
     let audioEnd = (tree.mdatOffset || 0) + (tree.mdatSize || 0);
     // mdat 空壳回退：用 altData（如 udta 里的音频数据）
@@ -1515,18 +1459,16 @@ async function decodeALACWithPureJS(rawBytes) {
     }
     // 推算总帧数
     let totalFrames = 0;
-    const off = info.config.length >= 28 ? 4 : 0;
-    const frameLen = ((info.config[off]<<24)|(info.config[off+1]<<16)|(info.config[off+2]<<8)|info.config[off+3]) || 4096;
     if (info.mdhdDuration && info.mdhdTimescale) {
       totalFrames = Math.ceil((info.mdhdDuration / info.mdhdTimescale) * info.sampleRate / frameLen);
     }
     if (totalFrames === 0 && audioEnd > audioStart) {
       // 用音频数据量估算: totalBytes / (bitDepth/8 * channels) / frameLen
-      const bps = ((info.config[off+5] || 24) / 8) * (info.channels || 2);
-      totalFrames = Math.ceil((audioEnd - audioStart) / bps / frameLen * 2); // ×2 允许码率波动
+      const bps = ((cfg ? cfg.bitDepth : 24) / 8) * (info.channels || 2);
+      totalFrames = Math.ceil((audioEnd - audioStart) / bps / frameLen * 2);
     }
     if (totalFrames === 0) totalFrames = Math.max(1, Math.floor((audioEnd - audioStart) / 200));
-    D.info('ALAC', `顺序解码: audioStart=${audioStart} audioEnd=${audioEnd} totalFrames≈${totalFrames} frameLen=${frameLen} mdatSize=${tree.mdatSize}`);
+    D.info('ALAC', `顺序解码: audioStart=${audioStart} audioEnd=${audioEnd} totalFrames≈${totalFrames} frameLen=${frameLen}`);
     pcm = decodeALACSequential(rawBytes, audioStart, audioEnd, info.config, info.sampleRate, info.channels, totalFrames, frameLen);
   }
   
@@ -1816,13 +1758,77 @@ async function processFiles(files) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  解码策略调度器 - 工业级管线
+//  按优先级依次尝试: 轻量→重量→兜底
+// ═══════════════════════════════════════════════════════════════
+
+const DECODE_STRATEGIES = [
+  {
+    id: 'browser',
+    label: '浏览器原生解码',
+    condition: () => true,
+    execute: async (rawBytes) => {
+      const buf = rawBytes.buffer.slice(rawBytes.byteOffset, rawBytes.byteOffset + rawBytes.byteLength);
+      return audioCtx.decodeAudioData(buf);
+    },
+  },
+  {
+    id: 'blob',
+    label: 'Blob URL 解码',
+    condition: () => true,
+    execute: async (rawBytes, file) => {
+      const blob = new Blob([rawBytes.buffer], { type: file.type || 'audio/mp4' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const fetched = await (await fetch(url)).arrayBuffer();
+        return audioCtx.decodeAudioData(fetched);
+      } finally { URL.revokeObjectURL(url); }
+    },
+  },
+  {
+    id: 'audioElement',
+    label: 'Audio Element 解码',
+    condition: () => true,
+    execute: async (_rawBytes, file) => {
+      await audioCtx.resume();
+      return decodeViaAudioElement(file);
+    },
+  },
+  {
+    id: 'webCodecs',
+    label: 'WebCodecs',
+    condition: (ext) => ['m4a', 'mp4', 'aac', 'alac'].includes(ext),
+    execute: async (rawBytes) => decodeWithWebCodecs(rawBytes),
+  },
+  {
+    id: 'alacJS',
+    label: '纯 JS ALAC',
+    condition: (ext, binInfo) => binInfo && binInfo.codec === 'ALAC' && ['m4a', 'mp4', 'alac'].includes(ext),
+    execute: async (rawBytes) => decodeALACWithPureJS(rawBytes),
+  },
+  {
+    id: 'ffmpeg',
+    label: 'FFmpeg.wasm',
+    condition: () => true,
+    execute: async (rawBytes, file) => {
+      if (ffmpegFailed || (!ffmpegLoading && !ffmpegReady)) {
+        throw new Error('FFmpeg 不可用' + (ffmpegFailed ? ' (CDN 不可达)' : ' (未加载)'));
+      }
+      showLoading(true, '等待 FFmpeg 引擎就绪...');
+      const startedAt = Date.now();
+      while (!ffmpegReady && (Date.now() - startedAt) < 60000) await sleep(800);
+      if (!ffmpegReady) throw new Error('FFmpeg 加载超时 (60s)');
+      showLoading(true, 'FFmpeg 解码中...');
+      return decodeWithFFmpeg(file, rawBytes);
+    },
+  },
+];
+
 async function processSingleFile(file) {
-  const errorLog = [];
-  // 读取原始字节
   const rawBytes = new Uint8Array(await file.arrayBuffer());
   D.info('READ', `${file.name}: ${rawBytes.byteLength} 字节`);
 
-  // 二进制格式检测
   const binInfo = parseFormatFromBytes(rawBytes);
   if (binInfo) {
     D.ok('FMT', `${file.name}: ${binInfo.codec || '?'} / ${binInfo.container} ${binInfo.lossless ? '(无损)' : '(有损)'}`);
@@ -1830,105 +1836,34 @@ async function processSingleFile(file) {
     D.warn('FMT', `${file.name}: 二进制签名未识别`);
   }
 
-  // 6 策略解码
-  let audioBuffer;
   const ext = file.name.split('.').pop().toLowerCase();
+  let audioBuffer = null;
+  const errors = [];
 
-  // ①
-  try {
-    const decodeBuffer = rawBytes.buffer.slice(rawBytes.byteOffset, rawBytes.byteOffset + rawBytes.byteLength);
-    audioBuffer = await audioCtx.decodeAudioData(decodeBuffer);
-  } catch (e) { errorLog.push('①: ' + e.message); }
+  for (const st of DECODE_STRATEGIES) {
+    if (audioBuffer) break;
+    if (!st.condition(ext, binInfo)) continue;
 
-  // ②
-  if (!audioBuffer) {
+    D.info('DEC', `${st.label}...`);
     try {
-      const blob = new Blob([rawBytes.buffer], { type: file.type || 'audio/mp4' });
-      const url = URL.createObjectURL(blob);
-      audioBuffer = await audioCtx.decodeAudioData(await (await fetch(url)).arrayBuffer());
-      URL.revokeObjectURL(url);
-    } catch (e) { errorLog.push('②: ' + e.message); }
-  }
-
-  // ③
-  if (!audioBuffer) {
-    try { audioBuffer = await audioCtx.decodeAudioData(rawBytes.buffer.slice(0)); }
-    catch (e) { errorLog.push('③: ' + e.message); }
-  }
-
-  // ④
-  if (!audioBuffer) {
-    try { audioBuffer = await audioCtx.decodeAudioData(await file.arrayBuffer()); }
-    catch (e) { errorLog.push('④: ' + e.message); }
-  }
-
-  // ⑤ Audio Element
-  if (!audioBuffer) {
-    try {
-      await audioCtx.resume();
-      audioBuffer = await decodeViaAudioElement(file);
-    } catch (e) { errorLog.push('⑤: ' + e.message); }
-  }
-
-  // ⑦ WebCodecs — 内嵌 MP4 解析器 (0 网络, ACE/AAC 专用)
-  if (!audioBuffer && (ext === 'm4a' || ext === 'mp4' || ext === 'aac' || ext === 'alac')) {
-    D.info('DEC', '策略⑦ WebCodecs 内嵌解析器...');
-    try {
-      audioBuffer = await decodeWithWebCodecs(rawBytes);
-      D.ok('DEC', '⑦ WebCodecs 解码成功');
-    } catch (e) {
-      errorLog.push('⑦: ' + e.message);
-      D.err('DEC', '⑦ WebCodecs 失败: ' + e.message);
-    }
-  }
-
-  // ⑧ 纯 JS ALAC 解码器 — 零依赖, 离线可用
-  if (!audioBuffer && binInfo && binInfo.codec === 'ALAC' && (ext === 'm4a' || ext === 'mp4' || ext === 'alac')) {
-    D.info('DEC', '策略⑧ 纯 JS ALAC 解码器...');
-    try {
-      audioBuffer = await decodeALACWithPureJS(rawBytes);
-      D.ok('DEC', '⑧ ALAC 纯 JS 解码成功');
-    } catch (e) {
-      errorLog.push('⑧: ' + e.message);
-      D.err('DEC', '⑧ ALAC 解码失败: ' + e.message);
-    }
-  }
-
-  // ⑥ FFmpeg
-  if (!audioBuffer) {
-    D.info('DEC', '策略⑥ FFmpeg.wasm...');
-    const ffmpegDead = ffmpegFailed || (!ffmpegLoading && !ffmpegReady); // 已知失败或加载已完成但未成功
-    if (ffmpegDead) {
-      errorLog.push('⑥: FFmpeg 不可用' + (ffmpegFailed ? ' (CDN 不可达)' : ''));
-      D.warn('DEC', '⑥ 跳过: FFmpeg 不可用');
-    } else {
-      try {
-        showLoading(true, '等待 FFmpeg 引擎就绪...');
-        const startedAt = Date.now();
-        while (!ffmpegReady && (Date.now() - startedAt) < 60000) {
-          await sleep(800);
-        }
-        if (ffmpegReady) {
-          showLoading(true, 'FFmpeg 解码中...');
-          audioBuffer = await decodeWithFFmpeg(file, rawBytes);
-          D.ok('DEC', '⑥ FFmpeg 解码成功');
-        } else {
-          errorLog.push('⑥: FFmpeg 加载超时');
-        }
-      } catch (e) {
-        errorLog.push('⑥: ' + e.message);
-        D.err('DEC', '⑥ FFmpeg 失败: ' + e.message);
+      audioBuffer = await PromiseWithTimeout(st.execute(rawBytes, file), 30000);
+      if (!audioBuffer || audioBuffer.duration <= 0) {
+        throw new Error('解码结果无效');
       }
+      D.ok('DEC', `${st.label} 成功`);
+    } catch (e) {
+      errors.push({ strategy: st.id, label: st.label, message: e.message });
+      D.err('DEC', `${st.label} 失败: ${e.message}`);
     }
   }
 
   if (!audioBuffer) {
-    throw new Error('解码失败: ' + errorLog.slice(-3).join(' | '));
+    const lastErrors = errors.slice(-3).map(e => `[${e.label}] ${e.message}`).join(' | ');
+    throw new Error(`所有策略均失败 (${errors.length}项): ` + lastErrors);
   }
 
   D.ok('DEC', `${file.name}: ${audioBuffer.numberOfChannels}ch ${(audioBuffer.sampleRate/1000).toFixed(1)}kHz ${audioBuffer.duration.toFixed(1)}s`);
 
-  // 格式信息
   const formatInfo = {
     filename: file.name,
     fileSize: file.size,
@@ -1940,7 +1875,6 @@ async function processSingleFile(file) {
     actualBitrate: (file.size * 8) / audioBuffer.duration,
   };
 
-  // 执行分析
   const tempState = {
     buffer: audioBuffer,
     file: file,
@@ -2631,20 +2565,20 @@ function generateNarrative() {
 
   // ── 基本信息 ──
   const formatDesc = F.lossless
-    ? `这是一份<span class="good">${F.codec || '无损'}</span>格式音频，数据完整保留，无压缩损失。`
-    : `这是一份<span class="warn">${F.codec || '有损'}</span>格式音频，编码过程会丢弃部分听感不明显的信号。`;
+    ? `这是一份<span class="good">${F.codec || '无损'}</span>格式音频，数据逐位完整保留。`
+    : `这是一份<span class="warn">${F.codec || '有损'}</span>格式音频，编码过程移除了一部分听觉掩蔽范围内的信号以减小体积。`;
 
   const srDesc = F.sampleRate >= 96000
-    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，属于高解析度级别${F.sampleRate >= 176400 ? '，接近 DSD 品质。体积较大，适合录音室存档或严肃聆听；普通回放场景下与 44.1kHz 听感差异极小' : '。相比 CD 品质有更高的理论频率上限，但普通人耳难以分辨差异'}。`
+    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，属于高解析度范围${F.sampleRate >= 176400 ? '。工程上保留了远超可闻频率的余量，适合录音室后期处理；日常回放场景下与 44.1kHz 的差异极难盲听分辨' : '。相比 CD 品质有更高的理论截止频率，但现有研究未证实人耳能可靠区分 96kHz 与 44.1kHz 的回放差异'}。`
     : F.sampleRate >= 44100
-    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，达到 CD 标准，人耳可闻频率范围（~20kHz）完全覆盖。`
-    : `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b><span class="warn">低于 CD 标准</span>，高频可能缺失。`;
+    ? `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b>，达到 CD 标准，完整覆盖人耳可闻范围（~20kHz）。`
+    : `采样率 <b>${(F.sampleRate/1000).toFixed(1)}kHz</b><span class="warn">低于 CD 标准</span>，高频延伸受限。`;
 
   lines.push(formatDesc + srDesc);
 
   const bdNote = A.actualBitDepth.estimated >= 20
-    ? `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>（${A.actualBitDepth.note}），动态余量充足。`
-    : `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>，${A.actualBitDepth.estimated < 16 ? '<span class="warn">精度偏低，动态范围受限</span>' : '为 CD 标准精度'}。`;
+    ? `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>（${A.actualBitDepth.note}），理论动态范围超过 ${(A.actualBitDepth.estimated*6).toFixed(0)}dB，远大于绝大多数回放设备的实际信噪比。`
+    : `实测位深度 <b>${A.actualBitDepth.estimated}-bit</b>，${A.actualBitDepth.estimated < 16 ? '<span class="warn">精度偏低</span>' : '与 CD 标准一致'}。`;
 
   lines.push(bdNote);
 
@@ -2652,7 +2586,7 @@ function generateNarrative() {
   const bw = A.cutoff.bw;
   const cf = A.cutoff.freq;
   if (bw < 80 && F.sampleRate > 48000 && A.cutoff.confidence === 'high') {
-    lines.push(`<span class="bad">⚠ 频谱截止频率 ${(cf/1000).toFixed(1)}kHz，带宽比仅 ${bw.toFixed(0)}%，高概率是从低采样率源升频（Upsampling）而来，并非原生 ${(F.sampleRate/1000).toFixed(0)}kHz 录音。</span>`);
+    lines.push(`<span class="bad">⚠ 频谱在 ${(cf/1000).toFixed(1)}kHz 处截断（带宽利用率 ${bw.toFixed(0)}%），与 ${(F.sampleRate/1000).toFixed(0)}kHz 标称采样率不匹配，很可能由低采样率源<b>升频（Upsampling）</b>而来。音频中不含高于 ${(cf/1000).toFixed(1)}kHz 的有效信号，文件体积却因高采样率成倍增加。</span>`);
   }
 
   // ── 响度与动态 ──
@@ -2662,71 +2596,71 @@ function generateNarrative() {
 
   let dynSummary = '';
   if (crest >= 14) {
-    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态范围优秀。`;
+    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态宽裕。`;
   } else if (crest >= 10) {
-    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态良好，有自然的强弱对比。`;
+    dynSummary = `Crest Factor <span class="good">${crest.toFixed(1)}dB</span>，动态范围合理，强弱对比自然。`;
   } else if (crest >= 8) {
-    dynSummary = `Crest Factor <span class="warn">${crest.toFixed(1)}dB</span>，存在适度压缩，属于现代流行乐的常见处理。吉他和人声之间的响度差异被缩小，听感上"更响更饱满"，但牺牲了部分动态层次。`;
+    dynSummary = `Crest Factor <span class="warn">${crest.toFixed(1)}dB</span>，有一定程度的动态压缩，属于现代流行乐的常见处理手法。`;
   } else {
-    dynSummary = `Crest Factor <span class="bad">${crest.toFixed(1)}dB</span>，动态被严重压缩。音乐几乎没有强弱变化，"响度战争"特征明显。长时间聆听容易产生听觉疲劳。`;
+    dynSummary = `Crest Factor <span class="bad">${crest.toFixed(1)}dB</span>，动态被高度压缩，强弱层次被抹平。`;
   }
 
   if (lra > 12) {
-    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，表明段落之间强弱落差较大，音乐有起伏感。`;
+    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，段落间有显著的强弱起伏，适合古典/电影原声类型。`;
   } else if (lra > 6) {
     dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，段落间响度差异适中。`;
   } else {
-    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，整曲响度非常均匀。`;
+    dynSummary += ` 响度范围 LRA ${lra.toFixed(1)}LU，整曲响度均一。`;
   }
   lines.push(dynSummary);
 
-  // ── LUFS ──
+  // ── LUFS（强调流媒体归一化上下文）──
   let lufsLine = `综合响度 <b>${lufs.toFixed(1)} LUFS</b>`;
   if (lufs > -8) {
-    lufsLine += `<span class="bad"> — 极度响亮，几乎肯定存在削波和失真。</span>`;
+    lufsLine += `<span class="bad"> — 属于极响的母带处理（参考：广播标准 -23 LUFS，多数流行乐 -14~-8 LUFS）。</span>`;
   } else if (lufs > -12) {
-    lufsLine += `<span class="warn"> — 偏响，但在 Spotify（-14 LUFS）/ Apple Music（-16 LUFS）/ YouTube（-14 LUFS）等流媒体平台上会被自动降低音量（Loudness Normalization），实际听感不会更响，反而因压缩损失了动态。</span>`;
+    lufsLine += `<span class="warn"> — 偏响，但这是当前主流流行/R&B/Hip-Hop 发行的典型响度区间。需要注意：Spotify / Apple Music / YouTube 等平台会执行<b>响度归一化</b>（约 -14~-16 LUFS），高响度带来的"更响"优势在流媒体端会被抵消，但因压缩损失掉的动态则无法恢复。</span>`;
   } else if (lufs > -18) {
-    lufsLine += `<span class="good"> — 符合主流流媒体响度推荐范围。</span>`;
+    lufsLine += `<span class="good"> — 落在主流流媒体的推荐响度区间内。</span>`;
   } else if (lufs > -24) {
-    lufsLine += `<span class="good"> — 偏安静，适合广播标准（EBU R128：-23 LUFS）。</span>`;
+    lufsLine += `<span class="good"> — 偏安静，符合广播标准（EBU R128: -23 LUFS ±1）。</span>`;
   } else {
-    lufsLine += ` — 非常安静，可能需要增加增益才能在普通设备上正常聆听。`;
+    lufsLine += ` — 非常安静，可能需要在播放端提高增益。`;
   }
   lines.push(lufsLine);
 
   // ── 削波 ──
   if (A.clip.hasClipping) {
     if (A.isCommercialMaster) {
-      lines.push(`<span class="hint">ℹ 检测到 <b>${A.clip.clippedSamples}</b> 个采样点削波（占比 ${A.clip.clippedPct.toFixed(3)}%），但这属于商业母带的正常现象。现代流行/R&B/Hip-Hop 的母带工程师会故意将响度推到上限，产生少量削波以换取更大的感知响度。在 Apple Music 的 ALAC 和 Spotify 的 AAC 中这种处理极为普遍。这不代表文件损坏。</span>`);
+      lines.push(`<span class="hint">ℹ 检测到 <b>${A.clip.clippedSamples}</b> 个削波点（占比 ${A.clip.clippedPct.toFixed(3)}%）。这属于商业母带的常见现象——母带工程师有意将瞬态推入限幅器以增加主观响度。在当前流媒体生态下，这种做法是多数流行/R&B/Hip-Hop 发行的标配，不代表文件损坏。</span>`);
     } else {
-      lines.push(`<span class="bad">⚠ 检测到 <b>${A.clip.clippedSamples}</b> 个采样点削波（占比 ${A.clip.clippedPct.toFixed(3)}%），最大连续削波 ${A.clip.maxConsecutiveClip} 点。削波导致波形顶部被"切平"，产生可闻失真（尤其在高频打击乐器上）。这通常是由于母带处理时将响度推到极限所致。</span>`);
+      lines.push(`<span class="bad">⚠ 检测到 <b>${A.clip.clippedSamples}</b> 个削波点（占比 ${A.clip.clippedPct.toFixed(3)}%，最大连续 ${A.clip.maxConsecutiveClip} 点）。波形被硬性切峰，可能在高频打击乐器上产生可闻失真。</span>`);
     }
     if (A.clip.hasTruePeakOver) {
-      lines.push(`<span class="bad">⚠ True Peak 过载 — 即使采样点未削波，D/A 转换时模拟重建信号仍可能超出 0 dBFS。这意味着在手机、蓝牙音箱等实际播放设备上失真可能比数据显示的更严重。</span>`);
+      lines.push(`<span class="bad">⚠ True Peak 过载 — D/A 转换时模拟重建信号可能超出 0 dBFS，在部分播放设备上失真会比数据显示的更明显。</span>`);
     }
   } else if (A.clip.peakDB > -0.3) {
-    lines.push(`峰值电平 ${A.clip.peakDB.toFixed(2)}dBFS，<span class="warn">非常接近上限</span>，余量极低。播放设备稍有增益就可能削波。`);
+    lines.push(`峰值电平 ${A.clip.peakDB.toFixed(2)}dBFS，<span class="warn">接近上限</span>，余量极低。`);
   }
 
   // ── DC Offset ──
   if (A.dcOffset.isSignificant) {
-    lines.push(`<span class="bad">⚠ 检测到直流偏移 ${(A.dcOffset.offset*100).toFixed(3)}%。这通常是录音设备硬件问题的迹象，会浪费有效动态范围并可能导致后续处理产生削波。</span>`);
+    lines.push(`<span class="bad">⚠ 直流偏移 ${(A.dcOffset.offset*100).toFixed(3)}% — 通常指示录音链路中的硬件问题（耦合电容、调音台偏置等），会占用有效动态范围。</span>`);
   }
 
   // ── 立体声 ──
   if (A.stereo) {
     const s = A.stereo;
     if (s.isOutOfPhase) {
-      lines.push(`<span class="bad">⚠ 立体声反相问题：左右声道相关性系数 ${s.correlation.toFixed(3)}，反相比例 ${s.phaseInversionPct.toFixed(2)}%。在单声道设备（如手机扬声器、蓝牙音箱单声道模式）上播放时，左右声道会相互抵消，导致声音空洞或完全消失。</span>`);
+      lines.push(`<span class="bad">⚠ 左右声道存在反相（相关性 ${s.correlation.toFixed(3)}，反相比例 ${s.phaseInversionPct.toFixed(2)}%）。在单声道回放环境下（手机扬声器、部分蓝牙音箱单声道模式），左右声道信号会互相抵消，中置元素（人声、底鼓等）可能大幅衰减或消失。</span>`);
     } else if (s.correlation > 0.95) {
-      lines.push(`立体声宽度 ${s.stereoWidth.toFixed(0)}%，<span class="warn">接近单声道</span>，左右声道几乎一致。声场偏窄，缺乏空间感。`);
+      lines.push(`立体声宽度 ${s.stereoWidth.toFixed(0)}%，<span class="warn">接近单声道</span>，左右声道几乎一致。声场偏窄。`);
     } else {
-      const wDesc = s.stereoWidth > 70 ? '声场宽广，左右声道信息丰富' : '声场自然';
+      const wDesc = s.stereoWidth > 70 ? '声场宽阔，左右声道差异明显' : '声场自然';
       lines.push(`立体声宽度 ${s.stereoWidth.toFixed(0)}%，${wDesc}，Mid/Side 比值 ${s.midSideRatio.toFixed(1)}dB。`);
     }
   } else {
-    lines.push(`此文件为单声道录音。`);
+    lines.push(`此文件为单声道。`);
   }
 
   // ── 总结 ──
@@ -2746,15 +2680,15 @@ function generateNarrative() {
 
   let verdict = '';
   if (A.isCommercialMaster) {
-    verdict = `<span class="good">✅ 综合评估：检测到商业母带特征（削波 + 压缩 + 高响度），这是 Apple Music / Spotify / CD 发行的标准母带处理方式，<b>并非文件缺陷</b>。此音频文件质量正常，可以放心使用。</span>`;
+    verdict = `<span class="good">✅ 综合评估：检测到商业母带特征。削波和动态压缩是母带环节的常见处理，非文件缺陷。此音频质量正常。</span>`;
   } else if (failCount === 0 && warnCount === 0) {
-    verdict = `<span class="good">✅ 综合评估：此音频文件质量优秀，无明显问题。各项指标均符合专业标准。</span>`;
+    verdict = `<span class="good">✅ 综合评估：各项技术指标良好，无明显问题。</span>`;
   } else if (failCount === 0) {
-    verdict = `<span class="good">✅ 综合评估：此音频文件整体良好。有 ${warnCount} 项提示性信息，但不影响正常使用。</span>`;
+    verdict = `<span class="good">✅ 综合评估：整体表现良好。有 ${warnCount} 项提示信息，不影响正常使用。</span>`;
   } else if (failCount <= 2 && !A.clip.hasClipping) {
-    verdict = `<span class="warn">⚠ 综合评估：检测到 ${failCount} 项缺陷，建议了解原因。如果用于发布或存档，建议检查原始录音或母带。</span>`;
+    verdict = `<span class="warn">⚠ 综合评估：检测到 ${failCount} 项异常，建议了解原因。如用于正式发布或存档，建议检查原始录音链路或母带处理流程。</span>`;
   } else {
-    verdict = `<span class="bad">❌ 综合评估：存在较多问题（${failCount} 项失败）。如果这是从 CD/流媒体提取的文件，这些"问题"可能是母带风格所致（如响度战争），属于正常现象。如果是你自行录制的文件，建议检查录音链路。</span>`;
+    verdict = `<span class="bad">❌ 综合评估：存在 ${failCount} 项问题。如果这是商业发行文件，这些"问题"大概率是母带风格所致，属于行业惯例。如果是自行录制的文件，建议排查录音链路。</span>`;
   }
   lines.push(verdict);
 
@@ -2835,12 +2769,12 @@ function narrateWaveform() {
   } else if (crest >= 10) {
     lines.push(`波形有适度的高低变化，动态范围<span class="good">良好</span>，现代摇滚/独立音乐的常见表现。`);
   } else if (crest >= 7) {
-    lines.push(`波形整体饱满、持续处于较响水平，<span class="warn">动态范围偏窄</span>。这是现代流行/R&B/Hip-Hop 母带的典型特征——为了在流媒体平台中显得"大声"而压缩了动态。`);
+    lines.push(`波形整体饱满、持续处于较响水平，<span class="warn">动态范围偏窄</span>。这是现代流行/R&B/Hip-Hop 母带的典型特征——通过压缩/限幅换取持续的感知响度，在流媒体时代已是行业惯例。`);
   } else {
-    lines.push(`波形几乎全程贴近最大电平，<span class="bad">严重压缩</span>，动态范围极窄。音乐没有"呼吸感"，所有元素都在争抢响度。`);
+    lines.push(`波形几乎全程贴近最大电平，<span class="warn">动态被高度压缩</span>，强弱层次被抹平。所有元素持续处于高能量状态，段落之间缺乏起伏对比。这在 EDM / 嘻哈 / 金属等以冲击力为导向的风格中属于刻意选择，绝非"损坏"。`);
   }
   if (A.clip.hasClipping) {
-    lines.push(`<span class="bad">波形顶部可以看到平坦的"切顶"现象——这是削波的直接证据。D/A 转换时这些削波会产生刺耳的咔嗒声和失真。</span>`);
+    lines.push(`<span class="bad">检测到削波：波形峰值被硬性切平（Brickwall Limiting 的典型痕迹）。在 D/A 转换时，被切平的波形顶部会产生高频谐波失真，在镲片、军鼓等瞬态丰富的打击乐器上可能被感知为颗粒感或锐利感。</span>`);
   }
   return lines.map(l => `<p style="margin:4px 0;line-height:1.7">${l}</p>`).join('');
 }
@@ -2863,7 +2797,7 @@ function narrateDynamics() {
   } else if (crest >= 8) {
     lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="warn">动态被适度压缩，是流行乐的常见处理手段</span>`);
   } else {
-    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="bad">过度压缩导致动态不足，听感平坦、缺乏层次</span>`);
+    lines.push(`<b>Crest Factor ${crest.toFixed(1)}dB</b> — <span class="warn">动态被高度压缩，是 EDM / 嘻哈 / 金属等冲击力导向风格的典型处理方式，并非文件缺陷。</span>`);
   }
 
   const lufs = l.integratedLoudnessLUFS;
@@ -2945,7 +2879,7 @@ function narrateQuality() {
   }
 
   for (const [dim, rating, detail] of failItems) {
-    lines.push(`<span class="bad"><b>${dim}</b>：${detail}。${dim === '削波' ? '这是最常见的"问题"，尤其在流行/摇滚/Hip-Hop 中几乎不可避免。削波意味着波形被切平，产生失真。' : dim === '立体声' ? '反相会导致单声道回放时声音空洞。检查录音或混音阶段是否有极性反转。' : dim === '动态' ? '动态被压缩到极致，这是响度战争的结果。音频失去了自然的强弱起伏。' : ''}</span>`);
+    lines.push(`<span class="bad"><b>${dim}</b>：${detail}。${dim === '削波' ? '削波表示母带限幅阶段的增益过高，波形被硬性切平——这在流行/摇滚/Hip-Hop 的商业发行中极为常见，是母带工程师在响度与动态之间的取舍。' : dim === '立体声' ? '反相会导致单声道回放时声音空洞。检查录音或混音阶段是否有极性反转。' : dim === '动态' ? '动态被高度压缩，整曲持续处于高能量状态。这是母带环节的刻意选择：牺牲动态层次换取一致的感知响度和冲击力，在 EDM、嘻哈、金属等风格中属于标准操作。' : ''}</span>`);
   }
 
   for (const [dim, rating, detail] of hintItems.filter(([d]) => d === '削波' || d === '动态')) {
@@ -3012,14 +2946,14 @@ function diagnoseRootCause() {
   const cf = A.cutoff;
   const clip = A.clip;
 
-  //  1. 响度战争 (削波 + 压缩 + 高响度 + 无损)
+  //  1. 母带硬限幅 (削波 + 压缩 + 高响度 + 无损)
   const loudnessWar = F.lossless && clip.hasClipping && crest < 10 && lufs > -12;
   if (loudnessWar) {
-    const era = crest < 6 ? '2008-2016 年"响度战争"高峰期' : crest < 8 ? '2010 年代响度战争末期' : '现代流媒体优化';
+    const era = crest < 6 ? '2000-2010 年代高响度母带处理（Brickwall Limiting）' : crest < 8 ? '2010 年代母带响度优化' : '现代母带响度处理';
     diag.push({
-      title: '母带风格：响度战争 / 硬限幅',
+      title: '母带风格：硬限幅（Brickwall Limiter）',
       severity: 'info',
-      detail: `此音频符合<b>${era}</b>的母带特征：使用硬限幅器（Brickwall Limiter）将响度推至 ${lufs.toFixed(0)} LUFS，Crest Factor 仅 ${crest.toFixed(1)}dB，产生 ${clip.clippedSamples} 个削波点。这不是文件损坏——母带工程师刻意牺牲动态以换取持续的感知响度。在 Apple Music / Spotify / CD 发行版中，这种处理极为普遍。`,
+      detail: `此音频符合<b>${era}</b>的母带特征：使用硬限幅器将响度推至 ${lufs.toFixed(0)} LUFS，Crest Factor 仅 ${crest.toFixed(1)}dB，产生 ${clip.clippedSamples} 个削波点。这不是文件损坏——母带工程师刻意牺牲动态以换取持续的感知响度。在 Apple Music / Spotify / CD 发行版中，这种处理极为普遍。`,
     });
   }
 
@@ -3291,9 +3225,9 @@ function renderDynamics() {
     ['削波检测', c.hasClipping ? `检测到削波 (${c.clippedSamples} 采样点)` : '未检测到削波', c.hasClipping ? 'var(--re)' : 'var(--gr)'],
     ['削波比例', `${c.clippedPct.toFixed(4)}%`],
     ['连续削波最大长度', `${c.maxConsecutiveClip} 采样点`],
-    ['说明', d.crest >= 14 ? '优秀动态范围 — 音频自然呼吸' : (d.crest >= 10 ? '良好' : (d.crest >= 8 ? '适度压缩 — 响度战争迹象' : '过度压缩 — 响度战争严重')), d.crest >= 14 ? 'var(--gr)' : (d.crest >= 8 ? 'var(--ye)' : 'var(--re)')],
+    ['说明', d.crest >= 14 ? '优秀动态范围 — 音频自然呼吸' : (d.crest >= 10 ? '良好' : (d.crest >= 8 ? '适度压缩 — 现代母带常见处理' : '高度压缩 — 冲击力导向风格典型')), d.crest >= 14 ? 'var(--gr)' : (d.crest >= 8 ? 'var(--ye)' : 'var(--re)')],
   ], `<dl>
-    <dt>Crest Factor（峰值因数）</dt><dd>峰值与 RMS 的差值，反映音频「呼吸空间」。<br><span class="good">≥14 dB</span>：自然动态，适合古典/爵士 | <span class="warn">8-14 dB</span>：适度压缩，现代流行常见 | <span class="bad">&lt;8 dB</span>：过度压缩，听觉疲劳。</dd>
+    <dt>Crest Factor（峰值因数）</dt><dd>峰值与 RMS 的差值，反映音频「呼吸空间」。<br><span class="good">≥14 dB</span>：自然动态，适合古典/爵士 | <span class="warn">8-14 dB</span>：适度压缩，现代流行常见 | <span class="warn">&lt;8 dB</span>：高度压缩，EDM/嘻哈/金属等风格常见。</dd>
     <dt>Sample Peak vs True Peak</dt><dd>Sample Peak 只看离散采样点，True Peak 用 4 倍过采样检测模拟信号重建后的真实峰值。<span class="bad">True Peak &gt; 0 dBTP</span> 意味着 DAC 输出可能削波。</dd>
     <dt>RMS 电平</dt><dd>均方根平均值，代表主观响度感知。流行乐通常在 -12 ~ -6 dBFS。</dd>
     <dt>Integrated LUFS（综合响度）</dt><dd>ITU-R BS.1770-4 标准，模拟人耳感知的整曲响度。<br><span class="good">-24 ~ -18 LUFS</span>：广播/古典 | <span class="warn">-18 ~ -12 LUFS</span>：流媒体正常范围 | <span class="bad">&gt; -8 LUFS</span>：极度压缩。</dd>
@@ -3348,7 +3282,7 @@ function renderQuality() {
     <dt>检测项目说明</dt><dd>
       <b>采样率/过采样</b>：检查采样率与频率上限是否匹配。96kHz 但频谱在 22kHz 截止 = 可能从 44.1k 升频而来。<br>
       <b>削波</b>：采样点或 True Peak 超过 0 dBFS，会产生可闻失真。<br>
-      <b>动态</b>：Crest Factor 过低说明音频被过度压缩（响度战争）。<br>
+      <b>动态</b>：Crest Factor 过低说明音频被高度压缩，是现代母带在响度与动态之间的常见取舍。<br>
       <b>立体声</b>：反相可能导致单声道回放时声音空洞或消失。<br>
       <b>DC 偏移</b>：直流分量浪费动态余量，应由录音设备过滤。
     </dd>
