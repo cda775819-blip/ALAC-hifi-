@@ -513,10 +513,9 @@ function parseFormatFromBytes(bytes) {
           const srRaw = (info[10] << 12) | (info[11] << 4) | (info[12] >> 4);
           const chRaw = ((info[12] & 0x0E) >> 1) + 1;
           const bpsRaw = ((info[12] & 0x01) << 4) | ((info[13] & 0xF0) >> 4);
-          const bpsMap = {0: 'REF', 1:8, 2:12, 4:16, 5:20, 6:24, 7:32};
           fmt.sampleRate = srRaw;
           fmt.channels = chRaw;
-          fmt.bitDepth = (bpsMap[bpsRaw] || bpsRaw);
+          fmt.bitDepth = bpsRaw + 1; // FLAC STREAMINFO 存储 (bits_per_sample - 1)
         }
       }
     }
@@ -1873,7 +1872,7 @@ async function processSingleFile(file) {
     fileExt: ext,
     ...(binInfo || {}),
     channels: audioBuffer.numberOfChannels,
-    sampleRate: audioBuffer.sampleRate,
+    sampleRate: (binInfo && binInfo.sampleRate) || audioBuffer.sampleRate,
     duration: audioBuffer.duration,
     actualBitrate: (file.size * 8) / audioBuffer.duration,
   };
@@ -2393,7 +2392,7 @@ function estimateBitDepth(data) {
   const step = Math.max(1, Math.floor(data.length / numSamples));
 
   // 测试多个位深度标尺: 8, 16, 20, 24, 32
-  const testBits = [8, 16, 18, 20, 22, 24, 32];
+  const testBits = [8, 16, 18, 20, 22, 24]; // 不含32：Float32尾数仅23bit，32bit量化无意义
   const scores = [];
 
   for (const bits of testBits) {
@@ -2412,13 +2411,17 @@ function estimateBitDepth(data) {
       const d = Math.abs(vals[i] - vals[i-1]);
       if (d > 0) gcd = gcdPair(gcd, d);
     }
-    // 如果 GCD ≈ 1，说明该位深度匹配
-    const penalty = Math.abs(gcd - 1) * scale; // 量化误差
+    // 如果 GCD ≈ 1，说明量化步长被该位深度整除 → 匹配
+    // 不乘 scale，避免高位深度因 scale 巨大而被低位的 GCD=1 误杀
+    const penalty = Math.abs(gcd - 1);
     scores.push({bits, score: penalty, gcd, uniqueVals: vals.length});
   }
 
-  // 找最佳匹配: score 最小且 uniqueVals 合理
-  scores.sort((a,b) => a.score - b.score);
+  // 按 GCD 精度排序；同精度的取更高位深度（更精确）
+  scores.sort((a, b) => {
+    if (a.score !== b.score) return a.score - b.score;
+    return b.bits - a.bits;
+  });
   const best = scores[0];
   let estimated = best.bits;
   let note = '';
