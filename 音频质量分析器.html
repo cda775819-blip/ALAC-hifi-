@@ -605,9 +605,16 @@ function parseFormatFromBytes(bytes) {
                 if (entSize >= 8 && stsdPos + 16 + entSize <= bytes.byteLength) {
                   const entType = readStr(stsdPos + 20, 4);
                   if (entType === 'alac') { fmt.codec = 'ALAC'; fmt.lossless = true; fmt.container = 'ALAC'; fmt.format = 'ALAC'; }
-                  else if (entType === 'mp4a') {
-                    const sr = (bytes[stsdPos + 40] << 8) | bytes[stsdPos + 41] || 44100;
-                    if (sr > 0 && sr < 1000000) fmt.sampleRate = sr;
+                  // 通读 mp4a/alac 共享的声道/位深/采样率（stsd entry offset 24-48）
+                  if (entSize >= 52) {
+                    const ch = (bytes[stsdPos + 40] << 8) | bytes[stsdPos + 41];
+                    const ssize = (bytes[stsdPos + 42] << 8) | bytes[stsdPos + 43];
+                    // sample rate: 16.16 fixed point at offset 48
+                    const srFixed = (bytes[stsdPos + 48] << 24) | (bytes[stsdPos + 49] << 16) | (bytes[stsdPos + 50] << 8) | bytes[stsdPos + 51];
+                    const sr = srFixed >> 16;
+                    if (ch > 0 && ch <= 64) fmt.channels = ch;
+                     if (sr > 0 && sr < 1000000) fmt.sampleRate = sr;
+                     if (ssize > 0 && ssize <= 64) fmt.bitDepth = ssize;
                   }
                 }
               }
@@ -1833,6 +1840,7 @@ async function processSingleFile(file) {
 
   const binInfo = parseFormatFromBytes(rawBytes);
   if (binInfo) {
+    D.info('FMT', `声道=${binInfo.channels}, 采样率=${binInfo.sampleRate}Hz, 位深=${binInfo.bitDepth}bit`);
     D.ok('FMT', `${file.name}: ${binInfo.codec || '?'} / ${binInfo.container} ${binInfo.lossless ? '(无损)' : '(有损)'}`);
   } else {
     D.warn('FMT', `${file.name}: 二进制签名未识别`);
@@ -1871,7 +1879,7 @@ async function processSingleFile(file) {
     fileSize: file.size,
     fileExt: ext,
     ...(binInfo || {}),
-    channels: audioBuffer.numberOfChannels,
+    channels: (binInfo && binInfo.channels) || audioBuffer.numberOfChannels,
     sampleRate: (binInfo && binInfo.sampleRate) || audioBuffer.sampleRate,
     duration: audioBuffer.duration,
     actualBitrate: (file.size * 8) / audioBuffer.duration,
@@ -1999,7 +2007,7 @@ async function runAnalysis() {
   STATE.analysis.clip = detectClipping(mono);
 
   // 实测位深度
-  STATE.analysis.actualBitDepth = estimateBitDepth(mono);
+  STATE.analysis.actualBitDepth = estimateBitDepth(mono, STATE.formatInfo);
 
   // DC offset
   STATE.analysis.dcOffset = detectDCOffset(mono);
@@ -2385,8 +2393,18 @@ function detectClipping(data) {
   };
 }
 
-function estimateBitDepth(data) {
-  // 精确位深度检测: 量化步长直方图分析
+function estimateBitDepth(data, formatInfo) {
+  // IEEE Float 格式不走 GCD 估算，直接返回容器位深度
+  if (formatInfo && formatInfo.codec === 'IEEE Float') {
+    return { estimated: formatInfo.bitDepth, note: `${formatInfo.bitDepth}-bit Float（浮点母带）`, detail: 'IEEE Float 容器', isFloat: true };
+  }
+
+  // 容器有声明的位深度，直接信任（GCD 算法在 16→24 量化时有浮点精度问题）
+  if (formatInfo && formatInfo.bitDepth && formatInfo.bitDepth >= 8 && formatInfo.bitDepth <= 32) {
+    return { estimated: formatInfo.bitDepth, note: `容器声明 ${formatInfo.bitDepth}-bit`, detail: '取容器元数据' };
+  }
+
+  // 精确位深度检测: 量化步长直方图分析（仅用于无容器声明的格式如 MP3/AAC）
   // 将浮点采样值映射到不同位深度的整数量化空间，检测最小有效步长
   const numSamples = Math.min(data.length, 200000);
   const step = Math.max(1, Math.floor(data.length / numSamples));
