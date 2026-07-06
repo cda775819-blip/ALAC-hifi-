@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音频质量分析器 Pro</title>
+<style>
+:root {
+  --bg0: #0d1117;
+  --bg1: #161b22;
+  --bg2: #21262d;
+  --bg3: #30363d;
+  --fg0: #e6edf3;
+  --fg1: #c9d1d9;
+  --fg2: #8b949e;
+  --fg3: #6e7681;
+  --ac:  #58a6ff;
+  --ac2: #79c0ff;
+  --gr:  #3fb950;
+  --ye:  #d29922;
+  --re:  #f85149;
+  --pu:  #bc8cff;
+  --cy:  #39d2c0;
+  --border: #30363d;
+  --radius: 8px;
+  --shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+  background: var(--bg0); color: var(--fg1); line-height: 1.5;
+  overflow-x: hidden; min-height: 100vh;
+}
+/* ── 布局 ── */
+.app{display:flex;min-height:100vh}
+.sidebar{
+  width: 280px; min-width: 280px; background: var(--bg1);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100vh; z-index: 10;
+}
+.sidebar-header{
+  padding: 20px 20px 16px; border-bottom: 1px solid var(--border);
+}
+.sidebar-header h1{font-size:1.1rem;font-weight:700;color:var(--fg0);letter-spacing:-0.3px}
+.sidebar-header .sub{font-size:.7rem;color:var(--fg3);margin-top:2px;text-transform:uppercase;letter-spacing:1px}
+.sidebar-nav{flex:1;padding:12px 0;overflow-y:auto}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:10px 20px;
+  font-size:.82rem;color:var(--fg2);cursor:pointer;transition:.15s;
+  border-left: 3px solid transparent; user-select: none;
+}
+.nav-item:hover{color:var(--fg0);background:rgba(255,255,255,.03)}
+.nav-item.active{color:var(--ac);background:rgba(88,166,255,.08);border-left-color:var(--ac);font-weight:600}
+.nav-item .ico{font-size:1rem;width:20px;text-align:center;opacity:.7}
+.sidebar-footer{padding:16px 20px;border-top:1px solid var(--border);font-size:.7rem;color:var(--fg3)}
+.main{
+  flex:1; display: flex; flex-direction: column; min-width: 0;
+}
+.topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:12px 24px;background:var(--bg1);border-bottom:1px solid var(--border);
+  position: sticky; top: 0; z-index: 5;
+}
+.topbar .file-name{font-size:.85rem;color:var(--fg2);font-weight:500;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.btn{
+  padding:7px 16px;border:1px solid var(--border);border-radius:6px;
+  background:var(--bg2);color:var(--fg1);font-size:.8rem;font-weight:500;
+  cursor:pointer;transition:.15s;display:inline-flex;align-items:center;gap:6px;
+}
+.btn:hover{background:var(--bg3);border-color:var(--fg3)}
+.btn.primary{background:var(--ac);border-color:var(--ac);color:#fff;font-weight:600}
+.btn.primary:hover{background:var(--ac2);border-color:var(--ac2)}
+.btn-group{display:flex;gap:8px}
+.content{padding:20px 24px;flex:1;overflow-y:auto}
+/* ── 拖放区 ── */
+.drop-zone{
+  border:2px dashed var(--border);border-radius:12px;
+  padding:60px 20px;text-align:center;cursor:pointer;transition:.2s;
+  background:var(--bg1);margin:80px auto;max-width:560px;
+}
+.drop-zone:hover,.drop-zone.active{border-color:var(--ac);background:var(--bg2)}
+.drop-zone h2{font-size:1.2rem;color:var(--fg0);margin-bottom:8px}
+.drop-zone p{font-size:.82rem;color:var(--fg3)}
+.drop-zone .icon{font-size:3rem;margin-bottom:16px;opacity:.5}
+.drop-zone .formats{margin-top:16px;font-size:.7rem;color:var(--fg3);font-family:'SF Mono',Consolas,monospace}
+/* 紧凑模式 */
+.drop-zone.compact{
+  padding:16px 24px;margin:12px 0 8px;max-width:100%;
+  display:flex;align-items:center;justify-content:center;gap:14px;
+}
+.drop-zone.compact .icon{font-size:1.5rem;margin:0}
+.drop-zone.compact h2{font-size:.85rem;margin:0}
+.drop-zone.compact p,.drop-zone.compact .formats{display:none}
+/* ── 卡片 ── */
+.card{
+  background:var(--bg1);border:1px solid var(--border);border-radius:var(--radius);
+  margin-bottom:16px;overflow:hidden;
+}
+.card-header{
+  padding:14px 20px;font-size:.85rem;font-weight:600;color:var(--fg0);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;
+  background:var(--bg2);
+}
+.card-body{padding:18px 20px}
+/* ── 帮助解读 ── */
+.help-toggle{
+  background:none;border:1px solid var(--border);color:var(--fg3);cursor:pointer;
+  font-size:.7rem;padding:4px 12px;border-radius:14px;transition:all .2s;
+  display:inline-flex;align-items:center;gap:4px;
+}
+.help-toggle:hover{color:var(--ac);border-color:var(--ac)}
+.help-toggle.open{color:var(--ac);border-color:var(--ac);background:rgba(88,166,255,.08)}
+.help-body{
+  font-size:.74rem;color:var(--fg2);line-height:1.7;
+  margin-top:12px;padding:14px 16px;background:var(--bg2);border-radius:8px;
+  max-height:0;overflow:hidden;opacity:0;transition:max-height .4s,opacity .3s,margin .3s,padding .3s;
+}
+.help-body.open{max-height:2000px;opacity:1}
+.help-body dt{font-weight:600;color:var(--fg0);margin-top:12px;font-size:.76rem}
+.help-body dt:first-child{margin-top:0}
+.help-body dd{margin:2px 0 0 0;padding-bottom:10px;border-bottom:1px solid rgba(48,54,61,.4)}
+.help-body dd:last-child{border-bottom:none;padding-bottom:0}
+.help-body .good{color:var(--gr)}
+.help-body .bad{color:var(--re)}
+.help-body .warn{color:var(--ye)}
+/* ── 智能诊断卡 ── */
+.smart-card{
+  font-size:.78rem;color:var(--fg1);line-height:1.7;
+  margin:12px 0;padding:14px 16px;background:#0d2233;border-radius:8px;
+  border-left:3px solid var(--ac);
+}
+.smart-card .good{color:var(--gr)}
+.smart-card .bad{color:var(--re)}
+.smart-card .warn{color:var(--ye)}
+.smart-card .hint{color:var(--ac)}
+.card-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid rgba(48,54,61,.5);font-size:.82rem}
+.card-row:last-child{border-bottom:none}
+.card-row .lbl{color:var(--fg2)}
+.card-row .val{color:var(--fg0);font-weight:600;text-align:right;font-variant-numeric:tabular-nums}
+.row-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:4px 32px}
+/* ── Canvas 容器 ── */
+.canvas-wrap{position:relative;margin:4px 0}
+.canvas-wrap canvas{width:100%;border-radius:4px;display:block}
+.canvas-wrap .label{display:flex;justify-content:space-between;font-size:.68rem;color:var(--fg3);margin-bottom:3px}
+/* ── 标签、评级 ── */
+.badge{
+  display:inline-block;font-size:.7rem;font-weight:700;padding:3px 10px;
+  border-radius:12px;letter-spacing:.3px;
+}
+.badge-pass{background:rgba(63,185,80,.15);color:var(--gr)}
+.badge-hint{background:rgba(88,166,255,.15);color:var(--ac)}
+.badge-warn{background:rgba(210,153,34,.15);color:var(--ye)}
+.badge-fail{background:rgba(248,81,73,.15);color:var(--re)}
+/* ── 进度条 ── */
+.progress-wrap{background:var(--bg2);border-radius:4px;height:6px;overflow:hidden;margin:4px 0 8px}
+.progress-bar{height:100%;background:var(--ac);border-radius:4px;transition:width .3s;width:0}
+/* ── 加载 ── */
+.loading-overlay{
+  position:fixed;inset:0;background:rgba(13,17,23,.7);z-index:100;
+  display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;
+}
+.spinner{width:36px;height:36px;border:3px solid var(--border);border-top-color:var(--ac);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-text{color:var(--fg2);font-size:.85rem}
+/* ── 状态栏 ── */
+.statusbar{
+  padding:8px 24px;font-size:.72rem;color:var(--fg3);background:var(--bg1);
+  border-top:1px solid var(--border);display:flex;justify-content:space-between;
+}
+/* ── 工具提示 ── */
+.tooltip{position:relative;cursor:help;border-bottom:1px dotted var(--fg3)}
+.tooltip:hover::after{
+  content:attr(data-tip);position:absolute;bottom:120%;left:50%;transform:translateX(-50%);
+  background:var(--bg0);border:1px solid var(--border);padding:6px 10px;
+  border-radius:6px;font-size:.72rem;white-space:nowrap;z-index:20;color:var(--fg1);
+}
+/* ── 响应式 ── */
+@media(max-width:768px){
+  .app{flex-direction:column}
+  .sidebar{width:100%;min-width:auto;height:auto;position:relative;flex-direction:row;overflow-x:auto}
+  .sidebar-nav{display:flex;flex-direction:row;padding:0}
+  .nav-item{border-left:none;border-bottom:3px solid transparent;padding:12px 16px;white-space:nowrap}
+  .nav-item.active{border-left:none;border-bottom-color:var(--ac)}
+  .sidebar-header,.sidebar-footer{display:none}
+  .topbar{padding:10px 16px}
+  .content{padding:12px 16px}
+  .drop-zone{margin:40px 16px;padding:40px 16px}
+}
+/* 滚动条 */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bg3);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--fg3)}
+/* ── 调试面板 ── */
+.debug-console{
+  background:var(--bg0); border-top:2px solid var(--border); position:relative; z-index:15;
+  max-height:0; overflow:hidden; transition:max-height .3s;
+}
+.debug-console.open{max-height:420px;overflow-y:auto}
+.debug-header{
+  padding:8px 24px;background:var(--bg1);display:flex;justify-content:space-between;align-items:center;cursor:pointer;
+  font-size:.78rem;color:var(--fg2);border-bottom:1px solid var(--border);user-select:none;
+}
+.debug-header:hover{color:var(--fg0)}
+.debug-header .count{font-size:.68rem;padding:2px 8px;border-radius:10px;background:var(--bg3)}
+.debug-header .count.err{background:rgba(248,81,73,.2);color:var(--re)}
+.debug-header .count.ok{background:rgba(63,185,80,.2);color:var(--gr)}
+.debug-body{padding:8px 24px;font-family:'SF Mono','Cascadia Code',Consolas,monospace;font-size:.7rem;line-height:1.7}
+.debug-entry{display:flex;gap:10px;align-items:baseline;padding:2px 0;border-bottom:1px solid rgba(48,54,61,.3)}
+.debug-entry .ts{color:var(--fg3);min-width:70px;flex-shrink:0}
+.debug-entry .tag{min-width:44px;flex-shrink:0;font-weight:700;font-size:.65rem;text-align:center;padding:1px 5px;border-radius:3px}
+.debug-entry .tag.info{background:rgba(88,166,255,.15);color:var(--ac)}
+.debug-entry .tag.ok{background:rgba(63,185,80,.15);color:var(--gr)}
+.debug-entry .tag.warn{background:rgba(210,153,34,.15);color:var(--ye)}
+.debug-entry .tag.err{background:rgba(248,81,73,.15);color:var(--re)}
+.debug-entry .msg{color:var(--fg1);word-break:break-all}
+.debug-empty{color:var(--fg3);text-align:center;padding:20px}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>Audio Analyzer Pro</h1>
+      <div class="sub">Professional Audio QC Tool</div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-item active" data-section="overview">
+        <span class="ico">◈</span> 总览
+      </div>
+      <div class="nav-item" data-section="spectrum">
+        <span class="ico">◫</span> 频谱分析
+      </div>
+      <div class="nav-item" data-section="spectrogram">
+        <span class="ico">▦</span> 频谱图
+      </div>
+      <div class="nav-item" data-section="soundspectrum">
+        <span class="ico">▥</span> 声谱
+      </div>
+      <div class="nav-item" data-section="waveform">
+        <span class="ico">▤</span> 波形
+      </div>
+      <div class="nav-item" data-section="dynamics">
+        <span class="ico">◎</span> 动态 & 响度
+      </div>
+      <div class="nav-item" data-section="loudnesscurve">
+        <span class="ico">〰</span> 响度曲线
+      </div>
+      <div class="nav-item" data-section="snr">
+        <span class="ico">◉</span> 信噪比
+      </div>
+      <div class="nav-item" data-section="distortion">
+        <span class="ico">∿</span> 失真分析
+      </div>
+      <div class="nav-item" data-section="stereo">
+        <span class="ico">◐</span> 立体声 & 相位
+      </div>
+      <div class="nav-item" data-section="quality">
+        <span class="ico">★</span> 质量评估
+      </div>
+      <div class="nav-item" data-section="info">
+        <span class="ico">i</span> 文件信息
+      </div>
+    </nav>
+    <div class="sidebar-footer">v8.0 &middot; 100% 本地处理</div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="main" id="mainArea">
+    <div class="topbar" id="topbar">
+      <span class="file-name" id="topFileName">— 未加载文件 —</span>
+      <div class="btn-group">
+        <button class="btn" id="btnBrowse">打开文件</button>
+        <button class="btn" id="btnExport" style="display:none">导出报告</button>
+      </div>
+    </div>
+    <input type="file" id="fileInput" accept="audio/*,.flac,.wav,.aiff,.aif,.alac,.m4a,.mp3,.aac,.ogg,.opus,.wma,.ape,.wv,.tta,.dsf,.dff,.caf,.ac3,.eac3,.mka,.webm" multiple style="display:none">
+
+    <div class="content" id="contentArea">
+      <!-- 拖放区 -->
+      <div class="drop-zone" id="dropZone">
+        <div class="icon">⬇</div>
+        <h2>拖放音频文件到此处</h2>
+        <p>或点击选择文件 / 拖入文件夹批量分析</p>
+        <p class="formats">FLAC &nbsp; WAV &nbsp; AIFF &nbsp; ALAC &nbsp; MP3 &nbsp; AAC &nbsp; OGG &nbsp; OPUS &nbsp; M4A &nbsp; WMA &nbsp; APE &nbsp; WV &nbsp; TTA &nbsp; DSF &nbsp; DFF &nbsp; CAF &nbsp; AC3 &nbsp; WebM</p>
+      </div>
+      <!-- 结果区 -->
+      <div id="results" style="display:none"></div>
+    </div>
+
+    <div class="statusbar" id="statusbar">
+      <span id="statusLeft">就绪</span>
+      <span id="statusRight">所有分析在浏览器本地完成 &middot; 文件不会上传</span>
+    </div>
+  </main>
+</div>
+
+<!-- 调试面板 -->
+<div class="debug-console" id="debugConsole">
+  <div class="debug-header" id="debugHeader">
+    <span>🛠 调试日志</span>
+    <div style="display:flex;gap:6px">
+      <span class="count err" id="debugErrCount" style="display:none">0</span>
+      <span class="count ok" id="debugOkCount" style="display:none">0</span>
+      <span style="font-size:.68rem">▼</span>
+    </div>
+  </div>
+  <div class="debug-body" id="debugBody">
+    <div class="debug-empty">等待文件加载...</div>
+  </div>
+</div>
+
+<!-- 加载遮罩 -->
+<div class="loading-overlay" id="loadingOverlay" style="display:none">
+  <div class="spinner"></div>
+  <div class="loading-text" id="loadingText">正在解码音频...</div>
+  <div class="progress-wrap" style="width:240px"><div class="progress-bar" id="progressBar"></div></div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>

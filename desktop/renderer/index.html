@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>音频质量分析器 Pro</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h1>Audio Analyzer Pro</h1>
+      <div class="sub">Professional Audio QC Tool</div>
+    </div>
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-item active" data-section="overview">
+        <span class="ico">◈</span> 总览
+      </div>
+      <div class="nav-item" data-section="spectrum">
+        <span class="ico">◫</span> 频谱分析
+      </div>
+      <div class="nav-item" data-section="spectrogram">
+        <span class="ico">▦</span> 频谱图
+      </div>
+      <div class="nav-item" data-section="soundspectrum">
+        <span class="ico">▥</span> 声谱
+      </div>
+      <div class="nav-item" data-section="waveform">
+        <span class="ico">▤</span> 波形
+      </div>
+      <div class="nav-item" data-section="loudness">
+        <span class="ico">◉</span> 响度
+      </div>
+      <div class="nav-item" data-section="narrative">
+        <span class="ico">◎</span> 分析报告
+      </div>
+      <div class="nav-item" data-section="debug">
+        <span class="ico">⚙</span> 调试日志
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="version">v8.0</div>
+    </div>
+  </aside>
+
+  <!-- 主内容 -->
+  <main class="main">
+    <!-- 顶部工具栏 -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="btn" id="btnOpen">打开文件</button>
+        <button class="btn" id="btnOpenFolder">批量导入</button>
+        <span class="worker-status idle" id="workerStatus">Worker 空闲</span>
+      </div>
+      <div class="topbar-right">
+        <span class="status-text" id="statusLeft">就绪</span>
+        <span class="status-text dim" id="statusRight"></span>
+      </div>
+    </header>
+
+    <!-- 内容区 -->
+    <div class="content" id="content">
+      <section class="section active" id="section-overview">
+        <div class="card" id="overviewCard">
+          <div class="card-header">文件概览</div>
+          <div class="card-body" id="overviewBody">
+            <p class="placeholder">请打开一个音频文件开始分析</p>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">关键指标</div>
+          <div class="card-body" id="metricsBody">
+            <p class="placeholder">分析后将显示关键指标</p>
+          </div>
+        </div>
+      </section>
+      <section class="section" id="section-spectrum"><div class="chart" id="spectrumChart"></div></section>
+      <section class="section" id="section-spectrogram"><canvas id="spectrogramCanvas"></canvas></section>
+      <section class="section" id="section-soundspectrum"><div class="chart" id="soundspectrumChart"></div></section>
+      <section class="section" id="section-waveform"><canvas id="waveformCanvas"></canvas></section>
+      <section class="section" id="section-loudness"><div class="chart" id="loudnessChart"></div></section>
+      <section class="section" id="section-narrative">
+        <div class="card">
+          <div class="card-header">智能分析报告</div>
+          <div class="card-body narrative" id="narrativeBody">
+            <p class="placeholder">分析完成后自动生成</p>
+          </div>
+        </div>
+      </section>
+      <section class="section" id="section-debug">
+        <div class="card">
+          <div class="card-header">调试日志 <span class="dim" id="debugSummary"></span></div>
+          <div class="card-body">
+            <div id="debugBody"><div class="debug-empty">等待文件加载...</div></div>
+            <div class="debug-console" id="debugConsole"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 批量结果 -->
+    <div class="batch-bar" id="batchBar" style="display:none">
+      <div class="batch-header">批量结果</div>
+      <div id="results"></div>
+    </div>
+  </main>
+</div>
+
+<!-- 加载遮罩 -->
+<div class="loading-overlay" id="loadingOverlay" style="display:none">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loadingText">正在解码音频...</div>
+  <div class="progress-wrap" style="width:240px"><div class="progress-bar" id="progressBar"></div></div>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

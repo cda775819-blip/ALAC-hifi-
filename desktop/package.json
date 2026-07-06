@@ -1,0 +1,41 @@
+{
+  "name": "audio-analyzer-v2",
+  "version": "2.0.0",
+  "description": "Audio Analyzer Pro V2 — 专业音频质量分析桌面工具",
+  "author": "AudioAnalyzer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "build": {
+    "appId": "audio.analyzer.v2",
+    "productName": "Audio Analyzer Pro",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "worker/**/*",
+      "core/**/*",
+      "utils/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  }
+}
