@@ -16,43 +16,29 @@
       <div class="sub">Professional Audio QC Tool</div>
     </div>
     <nav class="sidebar-nav" id="sidebarNav">
-      <div class="nav-item active" data-section="overview">
-        <span class="ico">◈</span> 总览
-      </div>
-      <div class="nav-item" data-section="spectrum">
-        <span class="ico">◫</span> 频谱分析
-      </div>
-      <div class="nav-item" data-section="spectrogram">
-        <span class="ico">▦</span> 频谱图
-      </div>
-      <div class="nav-item" data-section="soundspectrum">
-        <span class="ico">▥</span> 声谱
-      </div>
-      <div class="nav-item" data-section="waveform">
-        <span class="ico">▤</span> 波形
-      </div>
-      <div class="nav-item" data-section="loudness">
-        <span class="ico">◉</span> 响度
-      </div>
-      <div class="nav-item" data-section="narrative">
-        <span class="ico">◎</span> 分析报告
-      </div>
-      <div class="nav-item" data-section="debug">
-        <span class="ico">⚙</span> 调试日志
-      </div>
+      <div class="nav-item active" data-section="overview"><span class="ico">◈</span> 总览</div>
+      <div class="nav-item" data-section="spectrum"><span class="ico">◫</span> 频谱分析</div>
+      <div class="nav-item" data-section="spectrogram"><span class="ico">▦</span> 频谱图</div>
+      <div class="nav-item" data-section="soundspectrum"><span class="ico">▥</span> 声谱</div>
+      <div class="nav-item" data-section="waveform"><span class="ico">▤</span> 波形</div>
+      <div class="nav-item" data-section="dynamics"><span class="ico">▧</span> 动态&amp;响度</div>
+      <div class="nav-item" data-section="loudnesscurve"><span class="ico">◉</span> 响度曲线</div>
+      <div class="nav-item" data-section="snr"><span class="ico">▣</span> 信噪比</div>
+      <div class="nav-item" data-section="distortion"><span class="ico">▨</span> 失真分析</div>
+      <div class="nav-item" data-section="stereo"><span class="ico">◫</span> 立体声&amp;相位</div>
+      <div class="nav-item" data-section="quality"><span class="ico">◈</span> 质量评估</div>
+      <div class="nav-item" data-section="info"><span class="ico">▤</span> 文件信息</div>
+      <div class="nav-item" data-section="narrative"><span class="ico">◎</span> 分析报告</div>
+      <div class="nav-item" data-section="debug"><span class="ico">⚙</span> 调试日志</div>
     </nav>
-    <div class="sidebar-footer">
-      <div class="version">v8.0</div>
-    </div>
+    <div class="sidebar-footer"><div class="version">v8.0</div></div>
   </aside>
 
   <!-- 主内容 -->
   <main class="main">
-    <!-- 顶部工具栏 -->
     <header class="topbar">
       <div class="topbar-left">
-        <button class="btn" id="btnOpen">打开文件</button>
-        <button class="btn" id="btnOpenFolder">批量导入</button>
+        <button class="btn" id="btnBrowse">浏览文件</button>
         <span class="worker-status idle" id="workerStatus">Worker 空闲</span>
       </div>
       <div class="topbar-right">
@@ -61,27 +47,22 @@
       </div>
     </header>
 
+    <!-- 拖放区域 -->
+    <div id="dropZone" class="drop-zone">
+      <div class="drop-content">
+        <div class="icon">◉</div>
+        <h2>拖放音频文件到此处</h2>
+        <p>或点击选择文件进行分析</p>
+        <div class="formats">
+          支持格式：WAV · FLAC · MP3 · AAC · M4A · ALAC · OGG · WMA · AIFF · APE · WV · TTA · DSF · DFF · CAF · AC3 · EAC3 · OPUS · WEBM · MKA · SPX
+        </div>
+      </div>
+    </div>
+
+    <input type="file" id="fileInput" accept="audio/*,.flac,.wav,.mp3,.m4a,.aac,.ogg,.wma,.aiff,.aif,.ape,.wv,.tta,.dsf,.dff,.caf,.ac3,.eac3,.mka,.webm,.alac,.opus" multiple hidden>
+
     <!-- 内容区 -->
     <div class="content" id="content">
-      <section class="section active" id="section-overview">
-        <div class="card" id="overviewCard">
-          <div class="card-header">文件概览</div>
-          <div class="card-body" id="overviewBody">
-            <p class="placeholder">请打开一个音频文件开始分析</p>
-          </div>
-        </div>
-        <div class="card">
-          <div class="card-header">关键指标</div>
-          <div class="card-body" id="metricsBody">
-            <p class="placeholder">分析后将显示关键指标</p>
-          </div>
-        </div>
-      </section>
-      <section class="section" id="section-spectrum"><div class="chart" id="spectrumChart"></div></section>
-      <section class="section" id="section-spectrogram"><canvas id="spectrogramCanvas"></canvas></section>
-      <section class="section" id="section-soundspectrum"><div class="chart" id="soundspectrumChart"></div></section>
-      <section class="section" id="section-waveform"><canvas id="waveformCanvas"></canvas></section>
-      <section class="section" id="section-loudness"><div class="chart" id="loudnessChart"></div></section>
       <section class="section" id="section-narrative">
         <div class="card">
           <div class="card-header">智能分析报告</div>
@@ -92,7 +73,12 @@
       </section>
       <section class="section" id="section-debug">
         <div class="card">
-          <div class="card-header">调试日志 <span class="dim" id="debugSummary"></span></div>
+          <div class="card-header" id="debugHeader" style="cursor:pointer">
+            调试日志
+            <span class="dim" id="debugSummary"></span>
+            <span style="margin-left:8px;font-size:11px;color:var(--re);display:none" id="debugErrCount">✕ 0</span>
+            <span style="margin-left:4px;font-size:11px;color:var(--hl);display:none" id="debugOkCount">✓ 0</span>
+          </div>
           <div class="card-body">
             <div id="debugBody"><div class="debug-empty">等待文件加载...</div></div>
             <div class="debug-console" id="debugConsole"></div>
@@ -102,10 +88,7 @@
     </div>
 
     <!-- 批量结果 -->
-    <div class="batch-bar" id="batchBar" style="display:none">
-      <div class="batch-header">批量结果</div>
-      <div id="results"></div>
-    </div>
+    <div class="results-wrap" id="results"></div>
   </main>
 </div>
 
