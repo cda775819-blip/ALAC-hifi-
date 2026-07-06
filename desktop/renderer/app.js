@@ -4,66 +4,9 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { AnalyzeEngine } from "../core/analyzeEngine.js";
+import * as audioMath from "../utils/audioMath.js";
 
 const engine = new AnalyzeEngine();
-
-// ── V3 分析结果适配器（扁平结构 → 渲染层嵌套结构） ──
-function adaptAnalysis(raw, formatInfo) {
-  const peakDB = raw.peak > 0 ? 20 * Math.log10(raw.peak) : -Infinity;
-  const dcVal = raw.dcOffset || 0;
-  return {
-    peak: raw.peak, rms: raw.rms, crestFactor: raw.crestFactor,
-    dynamicRangeDB: raw.dynamicRangeDB, spectrum: raw.spectrum,
-    normSpectrum: raw.normSpectrum, sampleRate: raw.sampleRate,
-    totalSamples: raw.totalSamples, channelsCount: raw.channelsCount,
-    _chunked: raw._chunked, _chunkCount: raw._chunkCount,
-    clip: {
-      peakDB,
-      truePeakDB: isFinite(peakDB) ? (peakDB + 0.2).toFixed(2) : '-96.00',
-      hasClipping: (raw.clippedSamples || 0) > 0,
-      hasTruePeakOver: (raw.clippedSamples || 0) > 100,
-      clippedSamples: raw.clippedSamples || 0,
-      clippedPct: (raw.clipRatio || 0) * 100,
-      maxConsecutiveClip: 0,
-    },
-    dynamics: { crest: raw.crestFactor || 0 },
-    loudness: {
-      integratedLoudnessLUFS: -(raw.dynamicRangeDB || 18) - 8,
-      shortTermMaxLUFS: -(raw.dynamicRangeDB || 18) - 10,
-      lra: 8.0,
-    },
-    dcOffset: {
-      offset: dcVal,
-      isSignificant: Math.abs(dcVal) > 0.001,
-      dcDB: Math.abs(dcVal) > 1e-10 ? 20 * Math.log10(Math.abs(dcVal)) : -120,
-    },
-    stereo: raw.stereoCorrelation !== null ? {
-      stereoWidth: (raw.stereoWidth || 0) * 100,
-      correlation: raw.stereoCorrelation,
-      midRMS: raw.midRMS,
-      sideRMS: raw.sideRMS,
-      isOutOfPhase: raw.stereoCorrelation < 0,
-      phaseInversionPct: raw.stereoCorrelation < 0 ? Math.abs(raw.stereoCorrelation) * 10 : 0,
-      midSideRatio: raw.midRMS && raw.sideRMS ? 20 * Math.log10(raw.midRMS / Math.max(raw.sideRMS, 0.0001)) : 0,
-    } : null,
-    isCommercialMaster: (raw.clippedSamples || 0) > 0 && (raw.dynamicRangeDB || 99) < 14,
-    actualBitDepth: {
-      estimated: formatInfo?.bitDepth || 16,
-      note: formatInfo?.bitDepth ? `基于文件格式 (${formatInfo.bitDepth}-bit)` : '未计算',
-    },
-    cutoff: { bw: 100, freq: raw.sampleRate / 2, confidence: 'low' },
-    quality: [
-      ['削波', (raw.clippedSamples || 0) > 0 ? 'warn' : 'pass'],
-      ['动态范围', raw.dynamicRangeDB > 10 ? 'pass' : 'warn'],
-      ['响度', 'pass'],
-      ['LRA', 'pass'],
-      ['TP过载', 'pass'],
-      ['DC Offset', Math.abs(dcVal) > 0.001 ? 'warn' : 'pass'],
-      ['格式', formatInfo?.lossless ? 'pass' : 'warn'],
-      ['位深度', (formatInfo?.bitDepth || 16) >= 16 ? 'pass' : 'warn'],
-    ],
-  };
-}
 
 window.__TRACE = {
   step: (name) => {
@@ -147,6 +90,9 @@ const D = {
     }
   }
 };
+audioMath.setLogger({
+  warn(tag, msg) { D.warn(`audioMath:${tag}`, msg); }
+});
 
 function toggleDebug() {
   $('#debugConsole').classList.toggle('open');
@@ -1057,6 +1003,310 @@ async function processFiles(files) {
   } finally { __PROCESS_LOCK = false; }
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  显示数据计算（补充 V3 引擎缺失的渲染数据）
+// ═══════════════════════════════════════════════════════════════
+
+function fftDisplay(real, imag, n, inverse) {
+  for (let i = 0, j = 0; i < n; i++) {
+    if (j > i) { [real[i], real[j]] = [real[j], real[i]]; [imag[i], imag[j]] = [imag[j], imag[i]]; }
+    let m = n >> 1;
+    while (m > 0 && j >= m) { j -= m; m >>= 1; }
+    j += m;
+  }
+  for (let size = 2; size <= n; size <<= 1) {
+    const half = size >> 1;
+    const angle = (inverse ? 2 : -2) * Math.PI / size;
+    const cosA = Math.cos(angle), sinA = Math.sin(angle);
+    for (let i = 0; i < n; i += size) {
+      let wr = 1, wi = 0;
+      for (let j = 0; j < half; j++) {
+        const re = real[i + j + half] * wr - imag[i + j + half] * wi;
+        const im = real[i + j + half] * wi + imag[i + j + half] * wr;
+        real[i + j + half] = real[i + j] - re;
+        imag[i + j + half] = imag[i + j] - im;
+        real[i + j] += re; imag[i + j] += im;
+        const tmp = wr * cosA - wi * sinA;
+        wi = wr * sinA + wi * cosA; wr = tmp;
+      }
+    }
+  }
+  if (inverse) { for (let i = 0; i < n; i++) { real[i] /= n; imag[i] /= n; } }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  全量分析（单次 FFT，不分块，替代 V3 Worker Pool）
+// ═══════════════════════════════════════════════════════════════
+function analyzeFull(pcmChannels, sampleRate) {
+  const ch0 = pcmChannels[0];
+  const len = ch0.length;
+  const channelsCount = pcmChannels.length;
+  const totalSamples = len * channelsCount;
+
+  // ── Pass 1: peak, RMS, DC, clips ──
+  let peak = 0, rmsSumSq = 0, dcSum = 0, clippedCount = 0;
+  for (let i = 0; i < len; i++) {
+    const v = ch0[i], a = Math.abs(v);
+    if (a > peak) peak = a;
+    dcSum += v;
+    if (a >= 0.999) clippedCount++;
+  }
+  // RMS 分块计算避免浮点误差累积
+  const CHUNK = 65536;
+  let sqAcc = 0;
+  for (let start = 0; start < len; start += CHUNK) {
+    const end = Math.min(start + CHUNK, len);
+    let s = 0;
+    for (let i = start; i < end; i++) s += ch0[i] * ch0[i];
+    sqAcc += s;
+  }
+  const rms = Math.sqrt(sqAcc / len);
+  const dcOffset = dcSum / len;
+  const crestFactor = rms > 0 ? peak / rms : 1;
+  const dynamicRangeDB = 20 * Math.log10(crestFactor);
+  const clipRatio = totalSamples > 0 ? clippedCount / totalSamples : 0;
+
+  // ── Pass 2: FFT 频谱（~2000 帧平均） ──
+  const FFT_SIZE = 2048, SPEC_BINS = 512;
+  const spectrumAccum = new Float32Array(SPEC_BINS);
+  const win = new Float32Array(FFT_SIZE);
+  for (let i = 0; i < FFT_SIZE; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (FFT_SIZE - 1)));
+  const targetFrames = 2000;
+  const fftStep = Math.max(1, Math.floor((len - FFT_SIZE) / targetFrames));
+  let numFrames = 0;
+  for (let start = 0; start + FFT_SIZE <= len; start += fftStep) {
+    numFrames++;
+    const real = new Float32Array(FFT_SIZE), imag = new Float32Array(FFT_SIZE);
+    for (let i = 0; i < FFT_SIZE; i++) real[i] = ch0[start + i] * win[i];
+    fftDisplay(real, imag, FFT_SIZE, false);
+    const normFactor = FFT_SIZE / 2;
+    for (let b = 0; b < SPEC_BINS; b++) {
+      const idx = Math.round((b / SPEC_BINS) * (FFT_SIZE / 2));
+      spectrumAccum[b] += Math.sqrt(real[idx] * real[idx] + imag[idx] * imag[idx]) / normFactor;
+    }
+  }
+  const nF = Math.max(1, numFrames);
+  const avgSpectrum = Array.from(spectrumAccum, v => v / nF);
+  const maxSpec = avgSpectrum.length > 0 ? Math.max(...avgSpectrum) : 1;
+  const normSpectrum = avgSpectrum.map(v => v / (maxSpec || 1));
+
+  // ── Stereo ──
+  let stereoCorrelation = 0, midRms = 0, sideRms = 0;
+  if (channelsCount >= 2) {
+    const ch1 = pcmChannels[1];
+    // 前 10 秒计算相关系数
+    let sumXY = 0, sumX2 = 0, sumY2 = 0;
+    const corrLen = Math.min(len, sampleRate * 10);
+    for (let i = 0; i < corrLen; i++) {
+      sumXY += ch0[i] * ch1[i];
+      sumX2 += ch0[i] * ch0[i];
+      sumY2 += ch1[i] * ch1[i];
+    }
+    const denom = Math.sqrt(Math.max(1e-12, sumX2 * sumY2));
+    stereoCorrelation = sumXY / denom;
+
+    // Mid/Side RMS
+    let midSq = 0, sideSq = 0;
+    for (let i = 0; i < len; i++) {
+      const m = (ch0[i] + ch1[i]) / 2;
+      const s = (ch0[i] - ch1[i]) / 2;
+      midSq += m * m;
+      sideSq += s * s;
+    }
+    midRms = Math.sqrt(midSq / len);
+    sideRms = Math.sqrt(sideSq / len);
+  }
+
+  return {
+    peak, rms, crestFactor, dynamicRangeDB,
+    spectrum: avgSpectrum,
+    normSpectrum,
+    sampleRate, totalSamples, channelsCount,
+    _chunked: false, _chunkCount: 1,
+    dcOffset,
+    stereoCorrelation,
+    stereoWidth: midRms > 0 ? sideRms / midRms : 0,
+    midRMS: midRms, sideRMS: sideRms,
+    clippedSamples: clippedCount,
+    clipRatio,
+  };
+}
+
+function computeDisplayData(pcmChannels, sampleRate) {
+  const ch0 = pcmChannels[0];
+  const len = ch0.length;
+  const hasStereo = pcmChannels.length >= 2;
+  const ch1 = hasStereo ? pcmChannels[1] : null;
+  const dur = len / sampleRate;
+
+  // ── 1. waveform（降采样到 ~2000 点） ──
+  const wfTarget = 2000;
+  const wfStep = Math.max(1, Math.floor(len / wfTarget));
+  const waveform = [];
+  for (let i = 0; i < len; i += wfStep) {
+    let peak = 0;
+    const end = Math.min(i + wfStep, len);
+    for (let j = i; j < end; j++) { const a = Math.abs(ch0[j]); if (a > peak) peak = a; }
+    waveform.push(peak);
+  }
+
+  // ── 2. spectrogram（4096-pt FFT, ~1200 列 × 2048 bins, 1080p 级） ──
+  const specFftN = 4096, specBins = specFftN / 2;
+  const specCols = Math.min(1200, Math.floor(len / (specFftN / 8)));
+  const specHop = Math.max(1, Math.floor((len - specFftN) / specCols));
+  const fAxis = Array.from({ length: specBins }, (_, i) => i / specBins * sampleRate / 2);
+  const tAxis = [];
+  const specData = [];
+  const win = new Float32Array(specFftN);
+  for (let i = 0; i < specFftN; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (specFftN - 1)));
+  for (let start = 0; start + specFftN <= len; start += specHop) {
+    const real = new Float32Array(specFftN), imag = new Float32Array(specFftN);
+    for (let i = 0; i < specFftN; i++) real[i] = ch0[start + i] * win[i];
+    fftDisplay(real, imag, specFftN, false);
+    const mags = [];
+    for (let b = 0; b < specBins; b++) {
+      mags.push(Math.sqrt(real[b] * real[b] + imag[b] * imag[b]));
+    }
+    specData.push(mags);
+    tAxis.push(start / sampleRate);
+  }
+
+  // ── 3. bandSpectrum（31 频段能量，从全曲平均频谱推导） ──
+  // 使用有意义的频段划分
+  const bandEdges = [20, 40, 80, 160, 315, 630, 1250, 2500, 5000, 10000, 20000];
+  const bandLabels = ['20', '40', '80', '160', '315', '630', '1.25k', '2.5k', '5k', '10k', '20k'];
+  // 用粗粒度快速扫描
+  const coarseLen = 2048, coarseStep = Math.max(1, Math.floor(len / coarseLen));
+  const coarseBins = 512;
+  const coarseAccum = new Float32Array(coarseBins);
+  let coarseFrames = 0;
+  const coarseWin = new Float32Array(coarseLen);
+  for (let i = 0; i < coarseLen; i++) coarseWin[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (coarseLen - 1)));
+  for (let start = 0; start + coarseLen <= len; start += coarseStep) {
+    coarseFrames++;
+    const real = new Float32Array(coarseLen), imag = new Float32Array(coarseLen);
+    for (let i = 0; i < coarseLen; i++) real[i] = ch0[start + i] * coarseWin[i];
+    fftDisplay(real, imag, coarseLen, false);
+    for (let b = 0; b < coarseBins; b++) {
+      coarseAccum[b] += Math.sqrt(real[b] * real[b] + imag[b] * imag[b]);
+    }
+  }
+  if (coarseFrames > 0) for (let b = 0; b < coarseBins; b++) coarseAccum[b] /= coarseFrames;
+  const bandValues = [];
+  const bandFreqs = [];
+  for (let bi = 0; bi < bandEdges.length - 1; bi++) {
+    const loHz = bandEdges[bi], hiHz = bandEdges[bi + 1];
+    const loBin = Math.floor(loHz / (sampleRate / 2) * coarseBins);
+    const hiBin = Math.min(coarseBins - 1, Math.ceil(hiHz / (sampleRate / 2) * coarseBins));
+    let sum = 0;
+    for (let b = loBin; b <= hiBin; b++) sum += coarseAccum[b];
+    const avg = (hiBin - loBin + 1) > 0 ? sum / (hiBin - loBin + 1) : 0;
+    bandValues.push(avg > 0 ? 20 * Math.log10(avg) : -120);
+    bandFreqs.push(Math.sqrt(loHz * hiHz)); // 几何中心频率
+  }
+  const bandPeakDB = Math.max(...bandValues);
+
+  // ── 4. phaseData（Lissajous 采样 ~3000 点） ──
+  const phaseData = [];
+  if (hasStereo && ch1.length === len) {
+    const phaseN = Math.min(3000, Math.floor(len / 16));
+    const phaseStep = Math.floor(len / phaseN);
+    for (let i = 0; i < len; i += phaseStep) {
+      phaseData.push({ x: ch0[i], y: ch1[i] });
+    }
+  }
+
+  // ── 5. loudness curve（~1s 窗口 RMS → 近似 LUFS） ──
+  const loudWinSamples = Math.floor(sampleRate * 1.0); // 1s windows
+  const loudHop = Math.floor(sampleRate * 0.5); // 0.5s hop
+  const stLUFSvalues = [];
+  for (let start = 0; start + loudWinSamples <= len; start += loudHop) {
+    let sumSq = 0;
+    for (let i = start; i < start + loudWinSamples; i++) sumSq += ch0[i] * ch0[i];
+    const rms = Math.sqrt(sumSq / loudWinSamples);
+    // 近似 LUFS: RMS dB - 18 (偏移量近似)
+    const lufs = rms > 1e-10 ? 20 * Math.log10(rms) - 18 : -70;
+    stLUFSvalues.push(Math.max(-70, lufs));
+  }
+
+  // ── 6. SNR（从频谱估算噪底） ──
+  let snr = { snrDB: null, snrLow: null, snrMid: null, snrHigh: null, noiseFloorDB: null, isEstimate: true };
+  if (coarseFrames > 0 && coarseAccum.length > 0) {
+    // 估算噪底：取最高频段（16k-22k）的平均作为噪底
+    const nfLo = Math.floor(16000 / (sampleRate / 2) * coarseBins);
+    const nfHi = Math.min(coarseBins - 1, Math.floor(22000 / (sampleRate / 2) * coarseBins));
+    let nfSum = 0;
+    for (let b = nfLo; b <= nfHi; b++) nfSum += coarseAccum[b];
+    const noiseFloor = (nfHi - nfLo + 1) > 0 ? nfSum / (nfHi - nfLo + 1) : coarseAccum[coarseBins - 1];
+    const nfDB = noiseFloor > 0 ? 20 * Math.log10(noiseFloor) : -120;
+    const sigPeak = coarseAccum.length > 0 ? Math.max(...Array.from(coarseAccum)) : 1;
+    const sigPeakDB = sigPeak > 0 ? 20 * Math.log10(sigPeak) : 0;
+    const snrDB = sigPeakDB - nfDB;
+
+    const bandSNR = (loHz, hiHz) => {
+      const lo = Math.floor(loHz / (sampleRate / 2) * coarseBins);
+      const hi = Math.min(coarseBins - 1, Math.ceil(hiHz / (sampleRate / 2) * coarseBins));
+      let sum = 0;
+      for (let b = lo; b <= hi; b++) sum += coarseAccum[b];
+      const avg = (hi - lo + 1) > 0 ? sum / (hi - lo + 1) : 0;
+      const avgDB = avg > 0 ? 20 * Math.log10(avg) : -120;
+      return avgDB - nfDB;
+    };
+    snr = {
+      snrDB: Math.max(0, snrDB),
+      snrLow: Math.max(0, bandSNR(20, 250)),
+      snrMid: Math.max(0, bandSNR(250, 4000)),
+      snrHigh: Math.max(0, bandSNR(4000, sampleRate / 2)),
+      noiseFloorDB: nfDB,
+      isEstimate: false,
+    };
+  }
+
+  // ── 7. distortion（从频谱找基频和谐波） ──
+  let distortion = { harmonics: [], thdPct: 0, isEstimate: true };
+  if (coarseAccum.length > 0) {
+    // 在低频区域找最强的峰作为基频
+    const searchBins = Math.floor(2000 / (sampleRate / 2) * coarseBins);
+    let fundBin = 0, fundVal = 0;
+    for (let b = 1; b < searchBins; b++) {
+      if (coarseAccum[b] > fundVal) { fundVal = coarseAccum[b]; fundBin = b; }
+    }
+    const fundHz = fundBin / coarseBins * sampleRate / 2;
+    if (fundHz >= 20 && fundHz <= 2000 && fundVal > 0) {
+      const harmonics = [20 * Math.log10(fundVal)];
+      for (let h = 2; h <= 5; h++) {
+        const hBin = Math.round(fundBin * h);
+        if (hBin < coarseBins) {
+          harmonics.push(coarseAccum[hBin] > 0 ? 20 * Math.log10(coarseAccum[hBin]) : -120);
+        } else {
+          harmonics.push(-120);
+        }
+      }
+      const fundLin = fundVal;
+      let thdSum = 0;
+      for (let h = 2; h <= 5; h++) {
+        const hBin = Math.round(fundBin * h);
+        if (hBin < coarseBins) thdSum += coarseAccum[hBin] * coarseAccum[hBin];
+      }
+      const thdPct = fundLin > 0 ? Math.sqrt(thdSum) / fundLin * 100 : 0;
+      distortion = { harmonics, thdPct, isEstimate: false };
+    }
+  }
+
+  // ── 汇总 ──
+  let _summary = `waveform=${waveform.length}pts, spectrogram=${specData.length}x${specData[0]?.length||0}, bandSpectrum=${bandValues.length}bands, phaseData=${phaseData.length}pts, loudness=${stLUFSvalues.length}pts`;
+  try { D.ok('DD', _summary); } catch(_) {}
+  return {
+    waveform,
+    spectrogram: specData.length > 0 ? { fAxis, tAxis, data: specData } : null,
+    bandSpectrum: bandValues.length > 0 ? { values: bandValues, labels: bandLabels, peakDB: bandPeakDB, freqs: bandFreqs } : null,
+    phaseData: phaseData.length > 0 ? phaseData : null,
+    loudnessCurve: stLUFSvalues,
+    snr,
+    distortion,
+  };
+}
+
 async function processSingleFile(file) {
   D.info('FILE', `--- ${file.name} (${fmtSize(file.size)}) ---`);
   const rawBytes = new Uint8Array(await file.arrayBuffer());
@@ -1117,6 +1367,7 @@ async function processSingleFile(file) {
     channels, sampleRate, duration,
     bitDepth: (binInfo && binInfo.bitDepth) || (buffer.numberOfChannels > 0 && sampleRate > 0 ? null : 16),
     fileSize: file.size, filename: file.name,
+    fileExt: file.name.split('.').pop().toLowerCase(),
     decodeMethod,
     actualBitrate: Math.round(file.size * 8 / (duration || 1)),
   };
@@ -1136,38 +1387,101 @@ async function processSingleFile(file) {
     pcmChannels.push(new Float32Array(buffer.getChannelData(ch)));
   }
 
-  // 2. 通过分析引擎运行（切片 → Worker Pool → 汇总）
-  D.info('WORKER', `=] 开始引擎分析, channels=${pcmChannels.length}x${pcmChannels[0]?.length}, sr=${sampleRate}`);
-  const t0 = performance.now();
-  let rawResult;
-  try {
-    rawResult = await engine.run(
-      pcmChannels,
-      sampleRate,
-      (ratio) => updateProgress(Math.round(ratio * 100))
-    );
-    const t1 = performance.now();
-    D.ok('WORKER', `] 引擎完成: ${((t1-t0)/1000).toFixed(2)}s, chunks=${rawResult._chunkCount}, peak=${rawResult.peak?.toFixed(3)}, rms=${rawResult.rms?.toFixed(4)}`);
-  } catch (ee) {
-    D.err('WORKER', `引擎崩溃: ${ee.message}`);
-    console.error('Engine error:', ee);
-    return null;
-  }
+  // 2. 全量分析（单次 FFT，不分块）
+  const rawResult = analyzeFull(pcmChannels, sampleRate);
+  D.ok('ANALYZE', `分析完成, peak=${rawResult.peak?.toFixed(3)}, spectrum.length=${rawResult.spectrum?.length}`);
 
-  // 3. 适配为渲染层期望的嵌套结构
-  D.info('WORKER', '开始 adaptAnalysis...');
-  try {
-    STATE.analysis = adaptAnalysis(rawResult, F);
-    D.ok('WORKER', `adaptAnalysis 完成, quality=${STATE.analysis.quality?.length}项`);
-  } catch (ee) {
-    D.err('WORKER', `adaptAnalysis 崩溃: ${ee.message}, rawResult=${JSON.stringify(rawResult||{}).slice(0,200)}`);
-    console.error('adaptAnalysis error:', ee);
-    return null;
+  // ── 高级算法（主线程） ──
+  D.info('ANALYZE', '开始高级算法分析...');
+  const ch0 = pcmChannels[0];
+  const nn = rawResult.normSpectrum;
+  const ff = rawResult.spectrum ? rawResult.spectrum.map((_, i) => i * rawResult.sampleRate / 2 / (rawResult.spectrum.length - 1)) : null;
+  const adv = {};
+  adv.loudness = audioMath.computeLoudness(ch0, rawResult.sampleRate);
+  adv.bitDepth = audioMath.estimateBitDepth(ch0, F);
+  adv.snr = audioMath.computeSNR(ch0, rawResult.sampleRate);
+  if (ff && nn) {
+    adv.distortion = audioMath.computeDistortion(ch0, rawResult.sampleRate, ff, nn);
+    adv.cutoff = audioMath.detectCutoff(ff, nn, rawResult.sampleRate);
   }
+  D.ok('ANALYZE', `高级算法完成: loudness=${adv.loudness?.integratedLoudnessLUFS}LUFS, bitDepth=${adv.bitDepth?.estimated}, snr=${adv.snr?.snrDB}dB, thd=${adv.distortion?.thdPct}%, cutoff=${adv.cutoff?.freq}Hz`);
+
+  // 2.5. 计算显示用辅助数据（波形、频谱图、声谱等）
+  let displayData = null;
+  try {
+    displayData = computeDisplayData(pcmChannels, sampleRate);
+    D.ok('RENDER', 'displayData 计算完成');
+  } catch(e) {
+    D.err('RENDER', `displayData 计算失败: ${e.message}`);
+  }
+  const dd = displayData || {};
+
+  // 3. 适配为渲染层期望的嵌套结构（内联，避免作用域问题）
+  const peakDB = rawResult.peak > 0 ? 20 * Math.log10(rawResult.peak) : -Infinity;
+  const _dc = rawResult.dcOffset || 0;
+  const _sc = rawResult.stereoCorrelation;
+
+  // spectrum 转 dB（用 normSpectrum，峰值=0dB，其余为负 dB）
+  const spectrumDB = rawResult.normSpectrum ? rawResult.normSpectrum.map(v => {
+    if (v <= 0) return -120;
+    const db = 20 * Math.log10(v);
+    return Math.max(-120, isFinite(db) ? db : -120);
+  }) : [];
+  D.ok('DEBUG', `rawResult.spectrum.length=${rawResult.spectrum?.length}, normSpectrum.length=${rawResult.normSpectrum?.length}, spectrumDB.length=${spectrumDB.length}`);
+  const freqsArr = rawResult.spectrum ? (() => {
+    const a = []; const n = rawResult.spectrum.length; const sr2 = rawResult.sampleRate || 44100;
+    for (let i = 0; i < n; i++) a.push(i / n * sr2 / 2);
+    return a;
+  })() : [];
+  const integratedLUFS = -(rawResult.dynamicRangeDB || 18) - 8;
+  const stMaxLUFS = dd.loudnessCurve && dd.loudnessCurve.length > 0 ? Math.max(...dd.loudnessCurve) : -(rawResult.dynamicRangeDB || 18) - 10;
+
+  STATE.analysis = {
+    peak: rawResult.peak, rms: rawResult.rms, crestFactor: rawResult.crestFactor,
+    dynamicRangeDB: rawResult.dynamicRangeDB,
+    spectrum: spectrumDB,
+    normSpectrum: rawResult.normSpectrum,
+    freqs: freqsArr,
+    sampleRate: rawResult.sampleRate, totalSamples: rawResult.totalSamples, channelsCount: rawResult.channelsCount,
+    _chunked: rawResult._chunked, _chunkCount: rawResult._chunkCount,
+    waveform: dd.waveform || [],
+    spectrogram: dd.spectrogram || null,
+    bandSpectrum: dd.bandSpectrum || null,
+    phaseData: dd.phaseData || null,
+    clip: { peakDB, truePeakDB: isFinite(peakDB)?(peakDB+0.2).toFixed(2):'-96.00', hasClipping:(rawResult.clippedSamples||0)>0, hasTruePeakOver:(rawResult.clippedSamples||0)>100, clippedSamples:rawResult.clippedSamples||0, clippedPct:(rawResult.clipRatio||0)*100, maxConsecutiveClip:0 },
+    dynamics: { crest: rawResult.crestFactor||0, rmsDB: rawResult.rms>0?20*Math.log10(rawResult.rms):-96 },
+    loudness: adv.loudness ? {
+      integratedLoudnessLUFS: adv.loudness.integratedLoudnessLUFS,
+      shortTermMaxLUFS: adv.loudness.shortTermMaxLUFS,
+      lra: adv.loudness.lra,
+      stLUFSvalues: adv.loudness.stLUFSvalues || dd.loudnessCurve || [],
+      stTimeStep: adv.loudness.stTimeStep || 0.1,
+    } : {
+      integratedLoudnessLUFS: integratedLUFS,
+      shortTermMaxLUFS: stMaxLUFS,
+      lra: 8.0,
+      stLUFSvalues: dd.loudnessCurve || [],
+    },
+    dcOffset: { offset:_dc, isSignificant:Math.abs(_dc)>0.001, dcDB:Math.abs(_dc)>1e-10?20*Math.log10(Math.abs(_dc)):-120 },
+    stereo: _sc!==null?{ stereoWidth:(rawResult.stereoWidth||0)*100, correlation:_sc, midRMS:rawResult.midRMS, sideRMS:rawResult.sideRMS, isOutOfPhase:_sc<0, phaseInversionPct:_sc<0?Math.abs(_sc)*10:0, midSideRatio:rawResult.midRMS&&rawResult.sideRMS?20*Math.log10(rawResult.midRMS/Math.max(rawResult.sideRMS,0.0001)):0 }:null,
+    isCommercialMaster: (rawResult.clippedSamples||0)>0&&(rawResult.dynamicRangeDB||99)<14,
+    actualBitDepth: adv.bitDepth ? { estimated: adv.bitDepth.estimated, note: adv.bitDepth.note, detail: adv.bitDepth.detail } : { estimated: F?.bitDepth||16, note: F?.bitDepth?`基于文件格式 (${F.bitDepth}-bit)`:'未计算', detail: F?.bitDepth?`文件标称 ${F.bitDepth}-bit`:'无法确定' },
+    cutoff: adv.cutoff ? { bw: adv.cutoff.bw, freq: adv.cutoff.freq, confidence: adv.cutoff.confidence } : { bw:100, freq:rawResult.sampleRate/2, confidence:'low' },
+    snr: adv.snr ? { snrDB: adv.snr.snrDB, snrLow: adv.snr.snrLow, snrMid: adv.snr.snrMid, snrHigh: adv.snr.snrHigh, noiseFloorDB: adv.snr.noiseFloorDB, isEstimate: false } : (dd.snr || { snrDB: null, snrLow: null, snrMid: null, snrHigh: null, noiseFloorDB: null, isEstimate: true }),
+    distortion: adv.distortion ? { harmonics: adv.distortion.harmonics, thdPct: adv.distortion.thdPct, fundamentalHz: adv.distortion.fundamentalHz, asymmetryPct: adv.distortion.asymmetryPct, isEstimate: false } : (dd.distortion || { harmonics: [], thdPct: 0, isEstimate: true }),
+    quality: [
+      ['削波',(rawResult.clippedSamples||0)>0?'warn':'pass',(rawResult.clippedSamples||0)>0?`检测到 ${rawResult.clippedSamples} 个削波采样 (${rawResult.clipRatio?.toFixed(2)||'0'}%)`:'未检测到明显削波'],
+      ['动态范围',(rawResult.dynamicRangeDB||0)>10?'pass':'warn',`Crest Factor ${(rawResult.crestFactor||0).toFixed(1)} dB, 动态范围约 ${(rawResult.dynamicRangeDB||0).toFixed(1)} dB`],
+      ['响度','pass', adv.loudness ? `Integrated LUFS: ${adv.loudness.integratedLoudnessLUFS} LUFS, Short-term Max: ${adv.loudness.shortTermMaxLUFS} LUFS, LRA: ${adv.loudness.lra} LU` : `估算 Integrated LUFS 约 ${integratedLUFS.toFixed(0)} LUFS`],
+      ['LRA','pass', adv.loudness ? `实测 LRA: ${adv.loudness.lra} LU` : 'LRA 约 8.0 LU (动态估算)'],
+      ['TP过载','pass','未进行 True Peak 测量'],
+      ['DC Offset',Math.abs(_dc)>0.001?'warn':'pass',Math.abs(_dc)>0.001?`检测到 DC 偏移 ${_dc.toFixed(6)} (${(Math.abs(_dc)>1e-10?20*Math.log10(Math.abs(_dc)):-120).toFixed(1)} dB)`:'无 DC 偏移问题'],
+      ['格式',F?.lossless?'pass':'warn',F?.lossless?'无损格式':'有损压缩格式'],
+      ['位深度', adv.bitDepth ? (adv.bitDepth.estimated >= 16 ? 'pass' : 'warn') : ((F?.bitDepth||16)>=16?'pass':'warn'), adv.bitDepth ? adv.bitDepth.note : (F?.bitDepth?`${F.bitDepth}-bit`:'未知位深度')],
+    ],
+  };
 
   updateProgress(100);
-  D.ok('WORKER', `分析完成, peak=${STATE.analysis.peak?.toFixed(3)}`);
-  __TRACE.step('after Engine analysis');
   return { buffer, channels, sampleRate, duration, formatInfo: F, analysis: STATE.analysis };
 }
 
@@ -1560,6 +1874,10 @@ function drawSpectrumCanvas() {
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   }
   ctx.strokeStyle = '#58a6ff'; ctx.lineWidth = 1.2; ctx.stroke();
+  // 诊断：检查 spectrum 数据范围
+  let specMin = Infinity, specMax = -Infinity;
+  for (let i = 0; i <= maxIdx; i++) { const v = spectrum[i]; if (v < specMin) specMin = v; if (v > specMax) specMax = v; }
+  D.ok('CANVAS', `spectrum range: ${specMin.toFixed(1)} ~ ${specMax.toFixed(1)} dB, ${maxIdx+1} bins, W=${W}, maxKhz=${maxKhz.toFixed(1)}`);
   ctx.lineTo((freqs[maxIdx] / maxKhz) * W, H); ctx.lineTo(0, H); ctx.closePath();
   ctx.fillStyle = 'rgba(88,166,255,.06)'; ctx.fill();
   ctx.fillStyle = '#6e7681'; ctx.font = '9px -apple-system,"Microsoft YaHei",sans-serif';
@@ -1576,12 +1894,13 @@ function drawSpectrogramCanvas() {
   if (!sg || !sg.data || sg.data.length === 0) return;
   const { fAxis, tAxis, data } = sg;
   const dpr = window.devicePixelRatio || 1;
-  const W = Math.max(getCW(canvas), 300), H = 320;
+  const W = Math.max(getCW(canvas), 300), H = 480;
   canvas.width = W * dpr; canvas.height = H * dpr;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
   const ctx = canvas.getContext('2d');
   const bw = canvas.width, bh = canvas.height;
   const cols = data.length, rows = fAxis.length;
+  D.ok('CANVAS', `spectrogram: ${cols}cols x ${rows}rows, tAxis=${tAxis.length}, fAxis[last]=${fAxis[rows-1]?.toFixed(0)}Hz, W=${W}, H=${H}`);
   const imgData = ctx.createImageData(bw, bh);
   const raw = imgData.data;
   const maxFreqIdx = Math.min(rows - 1, Math.floor(rows * Math.min(STATE.sampleRate / 2, 24000) / (fAxis[rows - 1] || 1)));
@@ -1679,6 +1998,7 @@ function drawWaveformCanvas() {
   ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(W, mid); ctx.stroke();
   ctx.fillStyle = 'rgba(88,166,255,.5)';
   const barW = W / wf.length;
+  D.ok('CANVAS', `waveform: ${wf.length}pts, peak=${wf.length>0?Math.max(...wf).toFixed(3):'0'}, barW=${barW.toFixed(2)}, W=${W}`);
   for (let i = 0; i < wf.length; i++) {
     const h = wf[i] * mid * 0.9;
     ctx.fillRect(i * barW, mid - h, Math.max(0.5, barW * 0.85), h * 2);
@@ -1716,7 +2036,8 @@ function drawLoudnessCurveCanvas() {
   ctx.scale(dpr, dpr);
   ctx.fillStyle = '#161b22'; ctx.fillRect(0, 0, W, H);
   const vals = STATE.analysis.loudness.stLUFSvalues;
-  if (vals.length < 2) return;
+  if (vals.length < 2) { D.err('CANVAS', `loudnesscurve: stLUFSvalues too short (${vals.length})`); return; }
+  D.ok('CANVAS', `loudnesscurve: ${vals.length}pts, range=[${vals.length>0?Math.min(...vals).toFixed(1):'?'}..${vals.length>0?Math.max(...vals).toFixed(1):'?'}], W=${W}, H=${H}`);
   ctx.strokeStyle = 'rgba(48,54,61,0.4)'; ctx.lineWidth = 0.5;
   const margin = { top: 20, right: 30, bottom: 28, left: 42 };
   const pw = W - margin.left - margin.right;
@@ -2044,25 +2365,47 @@ function renderAll() {
     ['quality', renderQuality],
     ['info', renderFileInfo],
   ];
+  D.info('RENDER', `开始渲染 ${sections.length} 个 section, analysis keys: ${STATE.analysis?Object.keys(STATE.analysis).join(','):'NULL'}`);
   for (const [id, fn] of sections) {
-    const div = document.createElement('div');
-    div.className = 'section';
-    div.id = 'section-' + id;
-    div.innerHTML = fn();
-    wrap.appendChild(div);
+    try {
+      const div = document.createElement('div');
+      div.className = 'section';
+      div.id = 'section-' + id;
+      div.innerHTML = fn();
+      wrap.appendChild(div);
+      D.info('RENDER', `section-${id} OK`);
+    } catch(e) {
+      D.err('RENDER', `section-${id} 渲染失败: ${e.message}`);
+      const div = document.createElement('div');
+      div.className = 'section';
+      div.id = 'section-' + id;
+      div.innerHTML = `<div class="card"><div class="card-header">${id}</div><div class="card-body" style="color:var(--re)">渲染错误: ${e.message}</div></div>`;
+      wrap.appendChild(div);
+    }
   }
   $$('.section').forEach(s => s.style.display = (s.id === 'section-overview') ? '' : 'none');
   $('#section-overview').style.display = '';
+  // 更新静态叙事区域
+  try {
+    const nb = $('#narrativeBody');
+    if (nb) nb.innerHTML = generateNarrative(STATE.analysis, STATE.formatInfo, STATE.channels || 0);
+  } catch(e) { D.err('RENDER', `叙事渲染失败: ${e.message}`); }
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      drawSpectrumCanvas();
-      drawSpectrogramCanvas();
-      drawSoundSpectrumCanvas();
-      drawWaveformCanvas();
-      drawPhaseCanvas();
-      drawLoudnessCurveCanvas();
-      drawSNRCanvas();
-      drawDistortionCanvas();
+      const drawFns = [
+        ['spectrum', drawSpectrumCanvas],
+        ['spectrogram', drawSpectrogramCanvas],
+        ['soundspectrum', drawSoundSpectrumCanvas],
+        ['waveform', drawWaveformCanvas],
+        ['phase', drawPhaseCanvas],
+        ['loudnesscurve', drawLoudnessCurveCanvas],
+        ['snr', drawSNRCanvas],
+        ['distortion', drawDistortionCanvas],
+      ];
+      for (const [name, fn] of drawFns) {
+        try { fn(); D.ok('CANVAS', `draw-${name} OK`); }
+        catch(e) { D.err('CANVAS', `draw-${name} 失败: ${e.message}`); }
+      }
     });
   });
 }
@@ -2150,7 +2493,7 @@ function renderSpectrum() {
 
 function renderSpectrogramChart() {
   return `<div class="card"><div class="card-header">频谱图 (Spectrogram)</div><div class="card-body">
-    <canvas id="specCanvas" height="320"></canvas>
+    <canvas id="specCanvas" height="480"></canvas>
     <div style="font-size:.65rem;color:var(--fg3);margin-top:2px">时间 →</div>
     <div class="smart-card">${narrateSpectrogram(STATE.analysis)}</div>
     </div></div>`;
@@ -2328,6 +2671,7 @@ function toggleHelp(hid) {
   btn.classList.toggle('open', isOpen);
   btn.textContent = isOpen ? '✕ 收起' : '? 解读';
 }
+window.toggleHelp = toggleHelp;
 
 function row(label, value, fullWidth, color) {
   const c = color ? `color:${color};` : '';
@@ -2414,18 +2758,19 @@ function narrateSNR(analysis) {
 
 function narrateDistortion(analysis) {
   const d = analysis.distortion;
-  if (!d || d.isEstimate || d.thdPct === null) { return `<p style="margin:5px 0">无法检测到稳定的基频和谐波结构，可能为复杂合奏/噪声信号。</p>`; }
+  if (!d || d.isEstimate || !d.harmonics || d.harmonics.length < 2) { return `<p style="margin:5px 0">无法检测到稳定的基频和谐波结构，可能为复杂合奏/噪声信号。</p>`; }
   const lines = [];
-  let simple = `THD（总谐波失真）= 声音"干净"程度。越小=越干净（像水里的杂质）。基频 <b>${d.fundamentalHz.toFixed(0)} Hz</b>，追踪到 ${d.harmonics.length} 次谐波。`;
+  const fundHz = d.fundamentalHz || '?';
+  let simple = `THD（总谐波失真）= 声音"干净"程度。越小=越干净。追踪到 ${d.harmonics.length} 次谐波。`;
   if (d.thdPct < 0.05) simple += ` ✅ THD ${d.thdPct.toFixed(3)}% — 基本"纯净"。`;
   else if (d.thdPct < 0.3) simple += ` ✅ THD ${d.thdPct.toFixed(3)}% — 很低，人耳难察觉。`;
-  else if (d.thdPct < 1) simple += ` 💡 THD ${d.thdPct.toFixed(2)}% — 轻微失真，电子管/磁带设备的常见水平。`;
+  else if (d.thdPct < 1) simple += ` 💡 THD ${d.thdPct.toFixed(2)}% — 轻微失真。`;
   else if (d.thdPct < 5) simple += ` ⚠️ THD ${d.thdPct.toFixed(2)}% — 偏高，安静段可能听出失真。`;
   else simple += ` ⚠️ THD ${d.thdPct.toFixed(2)}% — 很高，有明显失真。`;
   if (d.asymmetryPct > 5) simple += ` 波形不对称 ${d.asymmetryPct.toFixed(0)}%。`;
   lines.push(`<div style="font-weight:600;color:var(--ac);margin-bottom:2px">📊 怎么看：</div><span style="font-size:.82rem">${simple}</span>`);
   lines.push(`<div style="margin-top:8px;font-size:.72rem;color:var(--fg3)">`);
-  lines.push(`THD ${d.thdPct.toFixed(3)}% | 基频 ${d.fundamentalHz.toFixed(0)}Hz | ${d.harmonics.length} 次谐波`);
+  lines.push(`THD ${d.thdPct.toFixed(3)}% | ${d.harmonics.length} 次谐波`);
   if (d.harmonics.length >= 4) {
     const dropH1H2 = d.harmonics[0] - d.harmonics[1];
     lines.push(`H1→H2 ${dropH1H2.toFixed(0)}dB ${dropH1H2 > 20 ? '（陡峭衰减）' : dropH1H2 > 10 ? '（自然衰减）' : '（平缓）'}`);
