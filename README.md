@@ -10,14 +10,18 @@
 
 ### 方式一：安装版（推荐）
 
-👉 **[下载 Audio Analyzer Pro v9.0 安装程序](https://github.com/cda775819-blip/ALAC-hifi-/releases/latest)**
+👉 **[下载 Audio Analyzer Pro v9.0.1 安装程序](https://github.com/cda775819-blip/ALAC-hifi-/releases/latest/download/Audio.Analyzer.Pro.Setup.9.0.1.exe)**
 
-安装包文件名：`Audio Analyzer Pro Setup 9.0.0.exe`
+文件名：`Audio Analyzer Pro Setup 9.0.1.exe`（211.8 MB）
 
 - 双击安装，可自选安装目录，自动创建桌面快捷方式
-- 卸载通过「设置 → 应用」或安装目录下的 `Uninstall`
+- **已内置 ffmpeg / ffprobe**，无需另行安装任何依赖
+- 卸载通过「设置 → 应用」，或安装目录下的 `Uninstall`
 
-> 全部版本见 [Releases 页面](https://github.com/cda775819-blip/ALAC-hifi-/releases)
+> 全部版本与更新说明见 👉 **[Releases 页面](https://github.com/cda775819-blip/ALAC-hifi-/releases)**
+>
+> 注：上面的直链指向最新版。GitHub 会把附件名里的空格转成点号，
+> 因此直链文件名使用 `Audio.Analyzer.Pro.Setup.*.exe` 形式。
 
 ### 方式二：从源码运行
 
@@ -177,9 +181,20 @@ K-weighting 滤波器对照 **ITU-R BS.1770-4 官方公布的 48kHz 数字系数
 
 LUFS 端到端最大偏差 **0.215 dB**（40Hz 极低音素材）。
 
-## v9.0 修复
+## 修复记录
 
-这一版修掉了一批**数值错误** —— 它们不报错、不崩溃，只是安静地给出错误结果：
+### v9.0.1
+
+| 问题 | 影响 |
+|------|------|
+| **M4A/ALAC 采样率报成 `1`** | 字段偏移差 2 字节，且读了容器里**恒为 0** 的 channelcount/samplesize。真值只存在 ALAC magic cookie 里 —— 现优先解析 cookie |
+| **DSF 声道数报成 `486850652`** | 把 64 位 ID3 元数据偏移当成了声道数、其高 32 位当成采样率。现按 `fmt` chunk 正确解析 |
+| **空/截断文件让分析链崩溃** | `parseFormatFromBytes` 抛 `RangeError`，现改为干净返回「无法识别」 |
+| **THD 对复音素材给出误导数值** | 该指标仅对单一基频素材有效。现增加方法适用性门槛，不满足时明确返回「无法测量」并说明判据，而非报出 100% |
+
+### v9.0
+
+修掉了一批**数值错误** —— 它们不报错、不崩溃，只是安静地给出错误结果：
 
 | 问题 | 影响 |
 |------|------|
@@ -193,6 +208,7 @@ LUFS 端到端最大偏差 **0.215 dB**（40Hz 极低音素材）。
 | 采样率被容器标称值覆盖 | 96kHz 文件被错标为 44.1kHz，频率轴全错 |
 | `preload.js` 未透传 IPC 参数 | FFmpeg 的时长/采样率/定位参数**静默失效** |
 | 数字静音文件 | 产生 -109.8 LUFS 这类越界值 |
+| FFmpeg 二进制被打进 `app.asar` | 外部进程无法执行 asar 内文件，打包版兜底解码与 ffprobe 探测**静默失效** |
 
 同时修复了：`engine.run()` 从未被调用（4 个 Worker 长期空转、实际跑的是主线程重复实现）、
 4 个重复拖放监听器、累积的「补丁1/2/3」死代码块。
@@ -201,7 +217,7 @@ LUFS 端到端最大偏差 **0.215 dB**（40Hz 极低音素材）。
 
 ```bash
 cd AudioAnalyzer_V2
-npm test          # 6 组回归测试
+npm test          # 8 组回归测试
 ```
 
 | 测试 | 守护内容 |
@@ -210,7 +226,9 @@ npm test          # 6 组回归测试
 | `worker.test.mjs` | 削波计数、相关度符号、bin↔Hz 不变式 |
 | `cutoff.test.mjs` | THD / 截止频率的数据类型 |
 | `audiomath-guard.test.mjs` | 静音早退、THD 钳制、LUFS 线性度 |
-| `kweighting.test.mjs` | K-weighting 频响精度（对照官方系数） |
+| `kweighting.test.mjs` | K-weighting 频响精度（对照官方 BS.1770-4 系数） |
+| `parse-format.test.mjs` | 文件头解析（M4A/ALAC/DSF/FLAC/WAV 对照真实文件期望值，并断言旧 bug 特征值不再出现） |
+| `distortion-method.test.mjs` | THD 方法适用性门槛（纯音应有值、复音须判不可测） |
 | `alac-decode.test.mjs` | ALAC 解码逐样本对拍（655,360 样本零差异） |
 
 其他验证脚本：
