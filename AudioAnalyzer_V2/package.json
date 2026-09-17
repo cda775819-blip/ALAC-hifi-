@@ -1,7 +1,7 @@
 {
   "name": "audio-analyzer-v2",
   "version": "9.0.0",
-  "description": "Audio Analyzer Pro V2 — 专业音频质量分析桌面工具",
+  "description": "Audio Analyzer Pro — 离线音频质量分析桌面工具（LUFS / 削波 / 位深度 / 升采样检测）",
   "author": "AudioAnalyzer",
   "main": "main.js",
   "scripts": {

@@ -1,9 +1,33 @@
-# Audio Analyzer Pro V2 — 完整源码详解
+# Audio Analyzer Pro — 完整源码详解
 
-> **版本**: v2.1.0 (Electron 桌面应用 / Windows EXE) — 含 5 大高级实测算法
+> **版本**: v9.0 (Electron 桌面应用 / Windows EXE)
 > **打包方式**: electron-builder + NSIS 安装程序
 > **技术栈**: Electron + Vanilla JS (ES Module) + Canvas API + Web Audio API + Web Workers
-> **代码总量**: ~3500 行 (含注释)
+> **代码总量**: ~4200 行 (含注释)
+> **仓库**: https://github.com/cda775819-blip/ALAC-hifi-
+
+---
+
+## ⚠️ 时效性说明（v9.0 复核）
+
+本文写于 v2.1.0 时期，主体架构与算法讲解**仍然有效**，但以下部分已随 v9.0 变更，
+阅读时请以源码为准：
+
+| 本文描述 | v9.0 实际状态 |
+|---------|--------------|
+| `analyzeFull()`（6.5 节） | **已删除**。它曾是主线程的重复实现，与 Worker 里的算法不一致，且从未被 Worker 架构接管。现统一由 `core/analyzeEngine.js` + `worker/analyze.worker.js` 承担 |
+| `renderer/index.html`（七节） | 结构已重写为三栏网格（侧栏 / 音乐库 / 主区），并新增 `renderer/library.js` |
+| `styles.css` 的「GitHub 暗色主题」（八节） | 已替换为仪器风格设计系统（炭黑 + 琥珀/青色，等宽数字读数） |
+| 根级 `index.html` | **已归档**到 `legacy/V2-旧版单页残留.html`（它是早期目录布局的残留，从未被加载） |
+| `assets/ffmpeg.exe` | 新增依赖 `assets/ffprobe.exe`（用于探测真实采样率），详见 README |
+| `dist/...Setup 2.0.0.exe` | 打包产物不再入库（>100MB 且会持续膨胀仓库），改用 GitHub Releases 分发 |
+| 版本号 v2.1.0 | 已统一为 **v9.0** |
+
+此外 v9.0 修复了一批**数值正确性问题**（K-weighting 滤波器、频标 2 倍偏移、
+THD 数据类型、截止频率恒为奈奎斯特、Worker 削波计数翻倍等），
+详见 README 的「v9.0 修复」章节与 `AudioAnalyzer_V2/test/` 下的回归测试。
+
+新增的测试与验证脚本（`AudioAnalyzer_V2/test/`，共 19 个）不在本文范围内。
 
 ---
 
@@ -11,13 +35,12 @@
 
 ```
 AudioAnalyzer_V2/
-├── main.js                    # Electron 主进程 — 窗口管理 + IPC + 文件系统
+├── main.js                    # Electron 主进程 — 窗口 + IPC + 文件系统 + FFmpeg/ffprobe
 ├── preload.js                 # 上下文桥接 — 安全暴露 API 给渲染进程
 ├── package.json               # 项目配置 + electron-builder 打包配置
 ├── build/
 │   └── icon.png               # EXE 图标
-├── assets/
-│   └── ffmpeg.exe             # FFmpeg 二进制裁剪（兜底解码器）
+├── assets/                    # 【需自备】ffmpeg.exe / ffprobe.exe
 ├── core/                      # 分析引擎核心模块（ES Module）
 │   ├── analyzeEngine.js       # 分析引擎入口 — 编排分片→Worker→汇总
 │   ├── chunkManager.js        # PCM 分片管理器 — 自适应分片策略
@@ -27,15 +50,17 @@ AudioAnalyzer_V2/
 ├── worker/
 │   └── analyze.worker.js      # Web Worker — 分片 FFT 频谱分析
 ├── utils/
+│   ├── audioMath.js           # 高级算法 — LUFS / 位深度 / SNR / THD / 截止频率
 │   ├── dom.js                 # DOM 快捷工具 ($ / $$)
 │   ├── format.js              # 格式化工具 (文件大小/时长)
 │   └── logger.js              # 调试日志系统 (D)
 ├── renderer/                  # 渲染进程 (前端 UI)
-│   ├── index.html             # 主页面 — 侧边栏 + Canvas 容器
-│   ├── styles.css             # 完整样式表 — GitHub 暗色主题
-│   └── app.js                 # 前端主逻辑 — 解码/分析/渲染 (~2900行)
-└── dist/                      # 构建输出
-    └── Audio Analyzer Pro Setup 2.0.0.exe
+│   ├── index.html             # 主页面 — 三栏网格布局
+│   ├── styles.css             # 仪器风格设计系统
+│   ├── app.js                 # 前端主逻辑 — 解码/分析/渲染
+│   └── library.js             # 音乐库浏览器 — 只读扫描 + 虚拟化列表
+├── test/                      # 回归测试与验证脚本（18 个）
+└── dist/                      # 构建输出（已 gitignore）
 ```
 
 ### 数据流向
