@@ -570,18 +570,51 @@ export function computeDistortion(data, sampleRate, freqs, spectrum) {
     const tailFloor = h1 - 60;
     const growthIsMeaningful = growth > 0.5 && (growthAt < 2 || harmonics[growthAt] > tailFloor);
 
-    if (!h1IsStrongest || growthIsMeaningful || !decayed) {
+    // ── 判据二：频谱能量是否集中在单一谱线 ──
+    // 「谐波单调递减」只排除了一部分复音素材。反例实测：
+    //   某真实音乐文件 H1=-0.04dB、H2=-10.8、H3=-12.7（完美单调递减）
+    //   → 通过判据一，算出 THD=37.7%，UI 报「很高，有明显失真」。
+    //   但该文件没有任何失真：它只是一段以某个音为主的音乐，
+    //   那把乐器的固有泛音（由基频整数倍构成，天然单调递减）被当成了失真。
+    //
+    // 区分「单音」与「音乐」的可靠物理量是能量集中度：
+    //   纯音的全部能量落在 1 个格子里；音乐的能量铺满整个频带。
+    //   实测（96kHz，8192点 FFT，1024格）：
+    //     1kHz 纯音  → 最强格占 57.7%
+    //     上述音乐   → 最强格占 19.4%
+    // 门槛取 30%，落在两者中间。
+    //
+    // 注意：这仍不是「真 THD」。真正的谐波失真测量需要激励是已知单音
+    // （测量设备自己发生信号），才谈得上"输入与输出的差值"。
+    // 对成品音乐只能给出「不适用」—— 宁可明说测不了，也不给误导性数字。
+    const bandSpec = spectrum.slice(2).filter(v => Number.isFinite(v));
+    let topBinEnergyPct = null;
+    if (bandSpec.length > 8) {
+      let maxDb = -Infinity;
+      let sumPow = 0;
+      for (const db of bandSpec) {
+        const p = Math.pow(10, db / 10);
+        sumPow += p;
+        if (db > maxDb) maxDb = db;
+      }
+      if (sumPow > 0) topBinEnergyPct = Math.pow(10, maxDb / 10) / sumPow * 100;
+    }
+
+    if (!h1IsStrongest || growthIsMeaningful || !decayed || (topBinEnergyPct !== null && topBinEnergyPct < 30)) {
       const why = !h1IsStrongest
         ? `谐波 H${(harmonics.indexOf(strongest) + 1)} 比基频高 ${(strongest - h1).toFixed(1)}dB`
         : (growthIsMeaningful
             ? `谐波在 H${growthAt + 1} 处回升 ${growth.toFixed(1)}dB`
-            : `谐波未低于基频（H1=${h1.toFixed(1)}dB，最强谐波=${Math.max(...harmonics.slice(1)).toFixed(1)}dB）`);
-      D.warn('Distortion', `谐波不呈单调递减（${why}），判定非单一基频素材，THD 不可测量`);
+            : (!decayed
+                ? `谐波未低于基频（H1=${h1.toFixed(1)}dB，最强谐波=${Math.max(...harmonics.slice(1)).toFixed(1)}dB）`
+                : `频谱能量分散，最强格仅占总能量 ${topBinEnergyPct.toFixed(1)}%（纯音应 >30%），不存在占主导的单音`));
+      D.warn('Distortion', `非单一基频素材（${why}），THD 不可测量`);
       return {
         thdPct: 0,
         fundamentalHz: Math.round(fundamentalHz * 10) / 10,
         harmonics: harmonics.map(v => Math.round(v * 10) / 10),
         asymmetryPct: 0,
+        topBinEnergyPct: topBinEnergyPct === null ? null : Math.round(topBinEnergyPct * 10) / 10,
         // unmeasurable：「方法不适用」而非「失真为 0」，UI 必须据此显示提示
         unmeasurable: true,
         reason: why,
@@ -627,7 +660,8 @@ export function computeDistortion(data, sampleRate, freqs, spectrum) {
       fundamentalHz: Math.round(fundamentalHz * 10) / 10,
       harmonics,
       asymmetryPct: Math.round(asymmetryPct * 10) / 10,
-      // 走到这里说明通过了单调递减门槛，谐波结构可信
+      topBinEnergyPct: topBinEnergyPct === null ? null : Math.round(topBinEnergyPct * 10) / 10,
+      // 走到这里说明通过了「单调递减 + 能量集中」两道门槛，谐波结构可信
       unmeasurable: false,
       // 保留 limitHit 以兼容既有 UI 判定（此处恒为 false）
       limitHit: !!limitHit,

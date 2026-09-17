@@ -100,7 +100,10 @@ console.log('=== 1) 纯正弦：谐波单调递减，应给出 THD ===');
     A.ok(!r.unmeasurable, `纯正弦不应判为不可测量（原因: ${r.reason}）`);
     A.ok(!r.limitHit, '纯正弦不应触发 limitHit');
     A.ok(r.thdPct >= 0 && r.thdPct < 5, `纯正弦 THD 应在 0..5%，实际 ${r.thdPct}%`);
-    console.log(`  估计基频=${f0.toFixed(1)}Hz  thdPct=${r.thdPct}%  unmeasurable=${r.unmeasurable}  ✅`);
+    // 纯音必须通过能量集中度门槛，否则新判据会把真纯音也拦掉
+    A.ok(r.topBinEnergyPct !== null && r.topBinEnergyPct >= 30,
+      `纯音能量集中度应 ≥30%，实际 ${r.topBinEnergyPct}%`);
+    console.log(`  估计基频=${f0.toFixed(1)}Hz  thdPct=${r.thdPct}%  集中度=${r.topBinEnergyPct}%  unmeasurable=${r.unmeasurable}  ✅`);
   }
 }
 
@@ -123,8 +126,41 @@ console.log('\n=== 2) 复音素材：H2 强于 H1，应判为不可测量 ===');
   }
 }
 
-// ── 3. 谐波中途回升 → 也应判不可测量 ──
-console.log('\n=== 3) 谐波中途回升（非单调）→ 应判为不可测量 ===');
+// ── 3. 单调递减但频谱能量分散 → 仍应判不可测量（真实音乐文件的形态）──
+console.log('\n=== 3) 谐波单调递减但无占主导单音 → 应判为不可测量 ===');
+{
+  // 复刻 E:\260917_2108.wav 的实测值：
+  //   H1=-0.04dB、H2=-10.8、H3=-12.7、H4=-25.4、H5=-31.2 —— 完美单调递减，
+  //   因此旧判据全部放行，算出 THD=37.7%，UI 显示「很高，有明显失真」。
+  //   但该文件没有任何失真：它是以某个音为主的音乐，那把乐器的固有泛音
+  //   （天然是基频的整数倍、天然单调递减）被当成了失真。
+  // 区分「单音」与「音乐」的可靠物理量是能量集中度：
+  //   纯音把全部能量放在 1 个格子里，音乐铺满整条频带
+  //   （实测 96kHz/1024 格：1kHz 纯音 57.7% vs 该音乐 19.4%）。
+  const data = tone(1000);
+  const f0 = detectFundamental(data);
+  const spec = specAtFundamental(f0, [-0.04, -10.81, -12.67, -25.40, -31.24]);
+  const r = AM.computeDistortion(data, SR, freqs, spec);
+  A.ok(r !== null, '应返回对象（带 unmeasurable 标记）');
+  if (r) {
+    // 先确认这个构造真的通过了旧判据 —— 否则新门槛根本没被测到
+    const h = r.harmonics;
+    const oldPass = h[0] >= Math.max(...h) - 0.5 && (h[0] - Math.max(...h.slice(1)) > 6);
+    A.ok(oldPass, `构造应满足旧的单调递减判据（harmonics=${JSON.stringify(h)}）`);
+    A.ok(r.unmeasurable === true,
+      `谐波单调递减但能量分散时，应判为不可测量，实际 unmeasurable=${r.unmeasurable}（thdPct=${r.thdPct}）`);
+    A.ok(r.thdPct === 0, `不可测量时 thdPct 应为 0，实际 ${r.thdPct}`);
+    A.ok(r.topBinEnergyPct !== null && r.topBinEnergyPct < 30,
+      `应报告能量集中度且 <30%，实际 ${r.topBinEnergyPct}%`);
+    A.ok(typeof r.reason === 'string' && /能量分散/.test(r.reason),
+      `原因应说明能量分散，实际 "${r.reason}"`);
+    console.log(`  harmonics=${JSON.stringify(h)}`);
+    console.log(`  集中度=${r.topBinEnergyPct}%  unmeasurable=${r.unmeasurable}  ${r.unmeasurable ? '✅' : '❌'}  reason="${r.reason}"`);
+  }
+}
+
+// ── 4. 谐波中途回升 → 也应判不可测量 ──
+console.log('\n=== 4) 谐波中途回升（非单调）→ 应判为不可测量 ===');
 {
   const data = tone(500);
   const f0 = detectFundamental(data);
@@ -137,8 +173,8 @@ console.log('\n=== 3) 谐波中途回升（非单调）→ 应判为不可测量
   }
 }
 
-// ── 4. 基频落在噪声底（比谱峰低 40dB 以上）→ 返回 null ──
-console.log('\n=== 4) 基频格无能量 → 应返回 null ===');
+// ── 5. 基频落在噪声底（比谱峰低 40dB 以上）→ 返回 null ──
+console.log('\n=== 5) 基频格无能量 → 应返回 null ===');
 {
   const data = tone(1000);
   const spec = new Array(BINS).fill(-120);
@@ -148,8 +184,8 @@ console.log('\n=== 4) 基频格无能量 → 应返回 null ===');
   console.log(`  返回 ${r === null ? 'null ✅' : JSON.stringify(r) + ' ❌'}`);
 }
 
-// ── 5. 数据不足 / 异常输入 ──
-console.log('\n=== 5) 边界与健壮性 ===');
+// ── 6. 数据不足 / 异常输入 ──
+console.log('\n=== 6) 边界与健壮性 ===');
 {
   A.ok(AM.computeDistortion(new Float32Array(1000), SR, freqs.slice(0, 5), new Array(5).fill(0)) === null,
     '频谱数据不足应返回 null');
@@ -158,8 +194,8 @@ console.log('\n=== 5) 边界与健壮性 ===');
   console.log('  频谱不足 / null 输入 → 均返回 null ✅');
 }
 
-// ── 6. 关键不变量：任何情况下都不再报出误导性的 100% ──
-console.log('\n=== 6) 关键不变量：非单音素材绝不报出数值 ===');
+// ── 7. 关键不变量：任何情况下都不再报出误导性的 100% ──
+console.log('\n=== 7) 关键不变量：非单音素材绝不报出数值 ===');
 {
   const cases = [
     ['H2>H1',   200, [-12, -9, -18, -10, -16]],

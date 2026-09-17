@@ -48,12 +48,19 @@ const { parseFormatFromBytes } = await import(pathToFileURL(tmp).href);
 
 const A = createAsserter();
 
-function probe(relPath) {
-  const p = path.join(MUSIC, relPath);
+// headBytes: 只把文件的前 N 字节喂给解析器，用来复现"解析窗口不足"的场景
+// find: 多个候选路径，取第一个存在的（外部样本不保证在本机）
+function probe(relPath, { abs = false, headBytes = HEAD, find = null } = {}) {
+  let p = abs ? relPath : path.join(MUSIC, relPath);
+  if (find) {
+    const hit = find.find(f => fs.existsSync(f));
+    if (!hit) return { missing: true, p: find[0] };
+    p = hit;
+  }
   if (!fs.existsSync(p)) return { missing: true, p };
   const st = fs.statSync(p);
   const fd = fs.openSync(p, 'r');
-  const buf = Buffer.alloc(Math.min(HEAD, st.size));
+  const buf = Buffer.alloc(Math.min(headBytes, st.size));
   const n = fs.readSync(fd, buf, 0, buf.length, 0);
   fs.closeSync(fd);
   let info = null, err = null;
@@ -84,6 +91,19 @@ const CASES = [
     expect: { container: 'WAV', codec: 'PCM', lossless: true, channels: 2, sampleRate: 44100 },
   },
   {
+    // ── 回归：data chunk 远在 fmt 之后 ──
+    // 该文件的 chunk 顺序是 fmt(12) → LIST(36,+270) → JUNK(314,+3766) → data(4088)。
+    // 旧实现的 DataView 只覆盖前 256 字节，且命中 fmt 后不 break，
+    // 继续推进 off 去读后面的 chunk 头 → RangeError → 整条分析链崩掉
+    // （用户看到的是"所有解码方式均失败"）。
+    // 这是外部样本，可能被移动/删除；缺失时下面的合成用例仍会覆盖同一 bug。
+    label: 'WAV data块在4088',
+    abs: true,
+    find: ['E:\\260917_2108.wav', path.join(MUSIC, '260917_2108.wav')],
+    headBytes: 4096,
+    expect: { container: 'WAV', codec: 'PCM', lossless: true, channels: 2, sampleRate: 96000, bitDepth: 24 },
+  },
+  {
     label: 'DSF (DSD128)',
     rel: '新建文件夹 (2)\\09.杀死那个石家庄人.dsf',
     expect: { container: 'DSF', codec: 'DSD', lossless: true, channels: 2, bitDepth: 1 },
@@ -110,7 +130,7 @@ console.log('-'.repeat(80));
 
 let checked = 0, skipped = 0;
 for (const c of CASES) {
-  const r = probe(c.rel);
+  const r = probe(c.rel, { abs: !!c.abs, headBytes: c.headBytes || HEAD, find: c.find || null });
   if (r.missing) {
     console.log(`${c.label.padEnd(26)} — 样本文件不存在，跳过（${r.p}）`);
     skipped++;
@@ -161,6 +181,58 @@ console.log('\n=== 边界与健壮性 ===');
   A.ok(r && r.container === 'DSF', '伪造 DSF 头应识别为 DSF');
   A.ok(r.channels === undefined, 'fmt 缺失时不应给出 channels');
   console.log('  空/过短/全零输入 → null ✅   伪造 DSF 头 → 识别但不猜字段 ✅');
+}
+
+// ── 合成 WAV：data chunk 在第一窗口之外（不依赖真实文件，必跑）──
+// 这是那个 RangeError 的最小复现：fmt 在前 44 字节内，data 在 4096。
+// 旧实现在这里抛 "Offset is outside the bounds of the DataView"。
+console.log('\n=== WAV chunk 遍历：data 在第一窗口之外 ===');
+{
+  function buildWav({ pad, dataOff, sr = 96000, ch = 2, bits = 24 }) {
+    const buf = new Uint8Array(dataOff + 64);
+    const dv = new DataView(buf.buffer);
+    const str = (o, s) => { for (let i = 0; i < s.length; i++) buf[o + i] = s.charCodeAt(i); };
+    str(0, 'RIFF'); dv.setUint32(4, buf.length - 8, true); str(8, 'WAVE');
+    str(12, 'fmt '); dv.setUint32(16, 16, true);                 // fmt 头在 12，size=16
+    dv.setUint16(20, 1, true); dv.setUint16(22, ch, true);
+    dv.setUint32(24, sr, true); dv.setUint32(28, sr * ch * bits / 8, true);
+    dv.setUint16(32, ch * bits / 8, true); dv.setUint16(34, bits, true);
+    let off = 36;
+    for (const [id, size] of pad) {                              // 干扰 chunk
+      str(off, id); dv.setUint32(off + 4, size, true);
+      off += 8 + size + (size % 2);
+    }
+    if (off !== dataOff) throw new Error(`构造错误：data 落在 ${off}，期望 ${dataOff}`);
+    str(off, 'data'); dv.setUint32(off + 4, 8, true);            // data 头
+    return buf;
+  }
+
+  const near = parseFormatFromBytes(buildWav({ pad: [], dataOff: 36 }));
+  A.ok(near && near.container === 'WAV' && near.sampleRate === 96000,
+    `data 紧邻 fmt 时应解析成功（得到 ${near && near.sampleRate}）`);
+
+  // 复刻真实文件的块布局：fmt(12) → LIST(36,+270) → JUNK(314,+3766) → data(4088)
+  const far = parseFormatFromBytes(buildWav({ pad: [['LIST', 270], ['JUNK', 3766]], dataOff: 4088 }));
+  A.ok(far !== null, 'data 在 4096 时应解析出对象（旧实现抛 RangeError）');
+  A.ok(far && far.container === 'WAV', `data 在 4096 时 container = ${far && far.container}，期望 WAV`);
+  A.ok(far && far.sampleRate === 96000, `data 在 4096 时 sampleRate = ${far && far.sampleRate}，期望 96000`);
+  A.ok(far && far.channels === 2 && far.bitDepth === 24,
+    `data 在 4096 时 channels/bitDepth = ${far && far.channels}/${far && far.bitDepth}，期望 2/24`);
+
+  // 奇数长度 chunk 要做字对齐（JUNK size=5 → 占 8+5+1=14 字节）
+  const odd = parseFormatFromBytes(buildWav({ pad: [['JUNK', 5], ['LIST', 1000]], dataOff: 1058 }));
+  A.ok(odd && odd.sampleRate === 96000, `奇数长 chunk 对齐后 sampleRate = ${odd && odd.sampleRate}，期望 96000`);
+
+  // 越界声明的 chunk 不能让解析器跑飞（也不能谎报成功）
+  const bad = new Uint8Array(buildWav({ pad: [], dataOff: 36 }));
+  new DataView(bad.buffer).setUint32(16, 0x7ffffff0, true);      // fmt size 声明成天文数字
+  let badErr = null;
+  try { parseFormatFromBytes(bad); } catch (e) { badErr = e.message; }
+  A.ok(!badErr, `chunk size 越界时不应抛异常（实际：${badErr}）`);
+
+  console.log(`  data@36    → ${near && near.sampleRate}Hz ${near && near.bitDepth}bit ✅`);
+  console.log(`  data@4088  → ${far && far.sampleRate}Hz ${far && far.bitDepth}bit ✅（旧实现此处 RangeError）`);
+  console.log(`  奇数 chunk → ${odd && odd.sampleRate}Hz ✅   越界 size → 无异常 ✅`);
 }
 
 try { fs.unlinkSync(tmp); } catch (_) {}

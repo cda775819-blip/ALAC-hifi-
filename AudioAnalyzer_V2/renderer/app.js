@@ -371,10 +371,19 @@ function parseFormatFromBytes(bytes) {
     if (off < 0 || avail <= 0) return '';
     return String.fromCharCode(...new Uint8Array(bytes.buffer, start, avail));
   };
-  const readU16LE = off => dv.getUint16(off, true);
-  const readU16BE = off => dv.getUint16(off, false);
-  const readU32LE = off => dv.getUint32(off, true);
-  const readU32BE = off => dv.getUint32(off, false);
+  // ⚠ 关键：所有整数读取都必须走 bytes 而不是 dv。
+  // dv 只覆盖前 256 字节，而 WAV/RIFF 的 chunk 遍历（含 LIST/JUNK 等填充块）
+  // 很容易走到 256 之外 —— 用 dv 会抛 RangeError 并让整条分析链崩掉。
+  // 之前的实现正是如此：一个 data chunk 位于偏移 4088 的 96kHz WAV
+  // 会在解析时抛 "Offset is outside the bounds of the DataView"。
+  const dvFull = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const inRange = (o, n) => o >= 0 && o + n <= bytes.byteLength;
+  const readU16LE = off => (inRange(off, 2) ? dvFull.getUint16(off, true) : 0);
+  const readU16BE = off => (inRange(off, 2) ? dvFull.getUint16(off, false) : 0);
+  const readU32LE = off => (inRange(off, 4) ? dvFull.getUint32(off, true) : 0);
+  const readU32BE = off => (inRange(off, 4) ? dvFull.getUint32(off, false) : 0);
+  const readI32LE = off => (inRange(off, 4) ? dvFull.getInt32(off, true) : 0);
+  void dv; // 保留原 DataView 以便对照；整数读取已统一改走 dvFull
 
   const sig4 = readStr(0, 4);
   const sig3 = readStr(0, 3);
@@ -385,7 +394,11 @@ function parseFormatFromBytes(bytes) {
     if (riffType === 'WAVE') {
       let fmt = { container: 'WAV', codec: 'PCM', format: 'WAV', lossless: true };
       let off = 12;
-      while (off < Math.min(bytes.byteLength, 1024)) {
+      let guard = 0;
+      // 遍历 RIFF chunk 找 fmt。
+      // 上限用 bytes.byteLength（而不是固定 1024）：fmt 可能被 LIST/JUNK 等
+      // 填充块推到很后面，固定上限会让它扫不到。
+      while (off + 8 <= bytes.byteLength && guard++ < 64) {
         const chunkId = readStr(off, 4);
         const chunkSize = readU32LE(off + 4);
         if (chunkId === 'fmt ') {
@@ -401,8 +414,13 @@ function parseFormatFromBytes(bytes) {
           fmt.bitDepth = bitsPerSample;
           fmt.bitrateEst = bitrate * 8;
           if (audioFormat === 0x0050 || audioFormat === 0x0055) fmt.lossless = false;
+          // 找到 fmt 就收工。原实现没有这个 break，会继续往后走，
+          // 撞上 LIST/JUNK 等填充块后越界（曾因此在解析器内抛 RangeError）。
+          break;
         }
-        off += 8 + chunkSize;
+        // chunkSize 为 0 或异常大时无法继续推进，避免死循环
+        if (chunkSize <= 0 || off + 8 + chunkSize > bytes.byteLength) break;
+        off += 8 + chunkSize + (chunkSize % 2);
       }
       return fmt;
     }
@@ -2087,10 +2105,12 @@ async function processSingleFile(file) {
     actualBitDepth: adv.bitDepth ? { estimated: adv.bitDepth.estimated, note: adv.bitDepth.note, detail: adv.bitDepth.detail } : { estimated: F?.bitDepth||16, note: F?.bitDepth?`基于文件格式 (${F.bitDepth}-bit)`:'未计算', detail: F?.bitDepth?`文件标称 ${F.bitDepth}-bit`:'无法确定' },
     cutoff: adv.cutoff ? { bw: adv.cutoff.bw, freq: adv.cutoff.freq, confidence: adv.cutoff.confidence } : { bw:100, freq:rawResult.sampleRate/2, confidence:'low' },
     snr: adv.snr ? { snrDB: adv.snr.snrDB, snrLow: adv.snr.snrLow, snrMid: adv.snr.snrMid, snrHigh: adv.snr.snrHigh, noiseFloorDB: adv.snr.noiseFloorDB, isEstimate: false } : (dd.snr || { snrDB: null, snrLow: null, snrMid: null, snrHigh: null, noiseFloorDB: null, isEstimate: true }),
-    // unmeasurable/reason：谐波不呈单调递减 → 非单一基频素材，THD 方法不适用。
+    // unmeasurable/reason：非单一基频素材 → THD 方法不适用。
     // limitHit 保留以兼容旧判定。两者都必须透传，
     // 否则界面会把「测不了」显示成「失真很高」。
-    distortion: adv.distortion ? { harmonics: adv.distortion.harmonics, thdPct: adv.distortion.thdPct, fundamentalHz: adv.distortion.fundamentalHz, asymmetryPct: adv.distortion.asymmetryPct, unmeasurable: !!adv.distortion.unmeasurable, reason: adv.distortion.reason || null, limitHit: !!(adv.distortion.limitHit || adv.distortion.unmeasurable), isEstimate: false } : (dd.distortion || { harmonics: [], thdPct: 0, isEstimate: true }),
+    // topBinEnergyPct 是判定依据（能量集中度），透传给 UI 用于解释原因，
+    // 漏了它 UI 就只能显示一句没有数字支撑的结论。
+    distortion: adv.distortion ? { harmonics: adv.distortion.harmonics, thdPct: adv.distortion.thdPct, fundamentalHz: adv.distortion.fundamentalHz, asymmetryPct: adv.distortion.asymmetryPct, topBinEnergyPct: adv.distortion.topBinEnergyPct === undefined ? null : adv.distortion.topBinEnergyPct, unmeasurable: !!adv.distortion.unmeasurable, reason: adv.distortion.reason || null, limitHit: !!(adv.distortion.limitHit || adv.distortion.unmeasurable), isEstimate: false } : (dd.distortion || { harmonics: [], thdPct: 0, isEstimate: true }),
     quality: [
       ['削波',(rawResult.clippedSamples||0)>0?'warn':'pass',(rawResult.clippedSamples||0)>0?`检测到 ${rawResult.clippedSamples} 个削波采样 (${rawResult.clipRatio?.toFixed(2)||'0'}%)`:'未检测到明显削波'],
       ['动态范围',(rawResult.dynamicRangeDB||0)>10?'pass':'warn',`Crest Factor ${(rawResult.crestFactor||0).toFixed(1)} dB, 动态范围约 ${(rawResult.dynamicRangeDB||0).toFixed(1)} dB`],
@@ -3422,21 +3442,28 @@ function narrateDistortion(analysis) {
   const d = analysis.distortion;
   if (!d || d.isEstimate || !d.harmonics || d.harmonics.length < 2) { return `<p style="margin:5px 0">无法检测到稳定的基频和谐波结构，可能为复杂合奏/噪声信号。</p>`; }
 
-  // limitHit / unmeasurable：谐波不呈单调递减，说明该文件没有单一的基频-谐波结构
+  // limitHit / unmeasurable：该文件不具备「单一基频」结构，
+  // 谐波不单调递减，或频谱能量不集中在单根谱线上
   // （复音音乐、打击乐、噪声类素材普遍如此）。
   // 此时 THD 数值不可用于判断「失真程度」，必须明说，
   // 否则会把「测不了」误读成「失真极高」。
   if (d.limitHit || d.unmeasurable) {
     const why = d.reason ? `<br>判据：${d.reason}` : '';
+    const conc = (d.topBinEnergyPct === null || d.topBinEnergyPct === undefined)
+      ? ''
+      : `<br>实测能量集中度：最强谱线仅占总能量 <b>${d.topBinEnergyPct.toFixed(1)}%</b>` +
+        `（单一纯音应 >50%）。`;
     return `<p style="margin:5px 0"><b>无法给出可靠的 THD 数值</b>：` +
       `本工具用「自相关估基频 → 在平均频谱上取 H2~H5」的方式估算谐波失真，` +
       `该方法的成立前提是音频只有<b>单一基频</b>（纯音、单件乐器独奏）——` +
-      `其物理依据是单音的谐波必然随阶数单调递减。` +
-      `本文件的谐波不满足这一条件${d.fundamentalHz ? `（估算基频 ${d.fundamentalHz}Hz）` : ''}，` +
-      `说明是<b>多件乐器叠加的复音素材</b>：谱线上并不存在"基频 + 谐波"结构，` +
-      `此时的比值没有物理意义。${why}</p>` +
+      `依据是单音的谐波必然随阶数单调递减、且能量集中在单根谱线上。` +
+      `本文件不满足这一条件${d.fundamentalHz ? `（估算基频 ${d.fundamentalHz}Hz）` : ''}，` +
+      `说明不存在"基频 + 谐波"结构：` +
+      `乐器的固有泛音同样是基频的整数倍、同样单调递减，因此很容易被误当成失真。` +
+      `此时的比值没有物理意义。${why}${conc}</p>` +
       `<p style="margin:5px 0;font-size:.75rem;color:var(--fg3)">` +
-      `若要评估这类素材的失真，需改用「与源文件逐样本差分的 null test」或专业测量工具（如 iZotope RX）。` +
+      `真正的 THD 需要<b>已知的单一激励</b>才能测量（测量设备自己发生正弦信号）。` +
+      `对成品音乐要评估失真，需改用「与源文件逐样本差分的 null test」或专业测量工具（如 iZotope RX）。` +
       `本工具其余指标（响度/动态/削波/频谱/位深）不受此限制，仍然有效。</p>`;
   }
 
