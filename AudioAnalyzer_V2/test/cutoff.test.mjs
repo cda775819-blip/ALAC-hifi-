@@ -94,13 +94,18 @@ console.log('\n=== 3) computeDistortion：纯正弦的 THD 应接近 0 ===');
     A.near(r.fundamentalHz, 1000, 100, '基频应被识别为 ~1000Hz');
   }
 
-  // 反例：传线性谱会被压平，THD 恒定偏高
+  // 反例：传线性谱会被压平，谐波与基频被压成同一量级。
+  // 修复前这会产出「恒定偏高」的 THD（曾实测 178%）。
+  // 引入「谐波须单调递减」的方法论门槛后，这种情况会被判为不可测量 ——
+  // 这比报一个假数字更好，所以这里断言的是「不再给出误导性数值」。
   const linear = spec.map(v => Math.pow(10, v / 20));
   const rLin = computeDistortion(data, SR, freqs, linear);
-  console.log(`  传入线性谱时 thdPct = ${rLin ? rLin.thdPct : 'null'}%  ← 这就是修复前的形态（恒定偏高）`);
+  const linDesc = rLin === null ? 'null'
+    : (rLin.unmeasurable ? `unmeasurable (${rLin.reason})` : `thdPct=${rLin.thdPct}%`);
+  console.log(`  传入线性谱时 → ${linDesc}`);
   if (rLin) {
-    A.ok(rLin.thdPct > r.thdPct * 10,
-      `线性谱本应产生明显偏高的 THD（原 bug），实际 ${rLin.thdPct}% vs dB 谱 ${r.thdPct}%`);
+    A.ok(rLin.unmeasurable === true || rLin.thdPct < 1,
+      `线性谱不应产出误导性 THD，实际 ${rLin.thdPct}%（unmeasurable=${rLin.unmeasurable}）`);
   }
 }
 

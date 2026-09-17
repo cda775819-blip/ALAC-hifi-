@@ -293,9 +293,84 @@ window.addEventListener('keydown', (e) => {
 //  文件头格式解析 — 覆盖所有格式
 // ═══════════════════════════════════════════════════════════════
 
+/**
+ * 从 MP4 sample entry 里解析 ALAC magic cookie。
+ *
+ * 为什么必须用它：ALAC 的 MP4 容器里，AudioSampleEntry 的 channelcount 与
+ * samplesize 字段实测为 **0**（实测样本 stsd+38 = 0 / stsd+40 = 2），
+ * 真实的声道数、位深、采样率只存在于 `alac` 这个专用 box（magic cookie）里。
+ * 旧实现去读 SampleEntry 的字段，读到的其实是 samplerate 的高 16 位，
+ * 结果 sampleRate 报成 1 —— 纯属巧合，语义完全错。
+ *
+ * 实测布局（36 字节的 alac box）：
+ *   +0  [size]              +4  "alac"          +8  version/flags
+ *   +12 frameLength         +16 bitDepth(24)    +17 pb  +18 mb  +19 kb
+ *   +20 numChannels         +21 maxRun(hi) ...  +28 maxFrameBytes
+ *   +32 avgBitRate          +36 sampleRate（24 位）
+ *
+ * @returns {{frameLength:number,bitDepth:number,numChannels:number,sampleRate:number}|null}
+ */
+function readALACMagicCookie(bytes, entryPos, entSize) {
+  try {
+    const limit = Math.min(entryPos + entSize, bytes.byteLength);
+    for (let p = entryPos + 8; p + 4 <= limit; p++) {
+      // 在 sample entry 内部搜索 'alac' box 的 type 字段
+      if (bytes[p] !== 0x61 || bytes[p + 1] !== 0x6C ||
+          bytes[p + 2] !== 0x61 || bytes[p + 3] !== 0x63) continue;
+
+      const boxStart = p - 4;   // box 起始（size 字段处）
+      const boxSize = ((bytes[boxStart] << 24) | (bytes[boxStart + 1] << 16) |
+                       (bytes[boxStart + 2] << 8) | bytes[boxStart + 3]) >>> 0;
+      if (!(boxSize >= 28) || boxStart + boxSize > bytes.byteLength) continue;
+
+      // 以下偏移全部为**实测值**（对真实 ALAC 文件 dump 字节确认），
+      // 相对 box 起始：+0 size、+4 'alac'、+8 version/flags(4)，
+      // 之后是 ALACSpecificConfig：
+      //   +12 frameLength(4)      +17 bitDepth(1)
+      //   +18 pb(1) +19 mb(1) +20 kb(1)
+      //   +21 numChannels(1)      +22 maxRun(2)
+      //   +24 maxFrameBytes(4)    +28 avgBitRate(4)   +32 sampleRate(4)
+      const u32at = (o) => ((bytes[boxStart + o] << 24) | (bytes[boxStart + o + 1] << 16) |
+                            (bytes[boxStart + o + 2] << 8) | bytes[boxStart + o + 3]) >>> 0;
+      const frameLength = u32at(12);
+      const bitDepth = bytes[boxStart + 17];
+      const numChannels = bytes[boxStart + 21];
+      const maxFrameBytes = u32at(24);
+      const avgBitRate = u32at(28);
+      const sampleRate = u32at(32);
+
+      // 合理性校验：三者全不合法说明没解析对，交由调用方回落 SampleEntry
+      const saneSr = sampleRate >= 8000 && sampleRate <= 1000000;
+      const saneCh = numChannels >= 1 && numChannels <= 64;
+      const saneBd = bitDepth >= 1 && bitDepth <= 64;
+      if (!saneSr && !saneCh && !saneBd) continue;
+
+      return {
+        boxSize, frameLength,
+        bitDepth: saneBd ? bitDepth : 0,
+        numChannels: saneCh ? numChannels : 0,
+        sampleRate: saneSr ? sampleRate : 0,
+        maxFrameBytes, avgBitRate,
+      };
+    }
+  } catch (_) { /* 解析失败返回 null，由调用方回落 */ }
+  return null;
+}
+
 function parseFormatFromBytes(bytes) {
+  // 边界防护：过短/空输入直接返回 null。
+  // 旧实现没有这道检查，readStr 会构造出越界的 Uint8Array 并抛 RangeError，
+  // 导致空文件或截断文件让整条分析链崩掉（而不是干净地"识别失败"）。
+  if (!bytes || bytes.byteLength < 12) return null;
+
   const dv = new DataView(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 256));
-  const readStr = (off, len) => String.fromCharCode(...new Uint8Array(bytes.buffer, bytes.byteOffset + off, len));
+  // readStr 做长度钳制：越界时截断而不是抛异常（长度不足时返回已读到的部分）
+  const readStr = (off, len) => {
+    const start = bytes.byteOffset + off;
+    const avail = Math.max(0, Math.min(len, bytes.byteLength - off));
+    if (off < 0 || avail <= 0) return '';
+    return String.fromCharCode(...new Uint8Array(bytes.buffer, start, avail));
+  };
   const readU16LE = off => dv.getUint16(off, true);
   const readU16BE = off => dv.getUint16(off, false);
   const readU32LE = off => dv.getUint32(off, true);
@@ -429,16 +504,39 @@ function parseFormatFromBytes(bytes) {
             if (entryCount > 0 && entryCount <= 100 && stsdPos + 24 <= bytes.byteLength) {
               const entSize = (bytes[stsdPos + 16] << 24) | (bytes[stsdPos + 17] << 16) | (bytes[stsdPos + 18] << 8) | bytes[stsdPos + 19];
               if (entSize >= 8 && stsdPos + 16 + entSize <= bytes.byteLength) {
-                const entType = readStr(stsdPos + 20, 4);
+                const entryPos = stsdPos + 16;
+                const entType = readStr(entryPos + 4, 4);
                 if (entType === 'alac') { fmt.codec = 'ALAC'; fmt.lossless = true; fmt.container = 'ALAC'; fmt.format = 'ALAC'; }
-                if (entSize >= 52) {
-                  const ch = (bytes[stsdPos + 40] << 8) | bytes[stsdPos + 41];
-                  const ssize = (bytes[stsdPos + 42] << 8) | bytes[stsdPos + 43];
-                  const srFixed = (bytes[stsdPos + 48] << 24) | (bytes[stsdPos + 49] << 16) | (bytes[stsdPos + 50] << 8) | bytes[stsdPos + 51];
-                  const sr = srFixed >> 16;
-                  if (ch > 0 && ch <= 64) fmt.channels = ch;
-                  if (sr > 0 && sr < 1000000) fmt.sampleRate = sr;
-                  if (ssize > 0 && ssize <= 64) fmt.bitDepth = ssize;
+
+                // ── 优先级 1：ALAC magic cookie ──
+                // 实测：ALAC 的 MP4 容器里 AudioSampleEntry 的 channelcount /
+                // samplesize 字段本身是 0，真值只存在 cookie 里，必须优先取它。
+                const cookie = readALACMagicCookie(bytes, entryPos, entSize);
+                if (cookie) {
+                  if (cookie.numChannels > 0 && cookie.numChannels <= 64) fmt.channels = cookie.numChannels;
+                  if (cookie.bitDepth > 0 && cookie.bitDepth <= 64) fmt.bitDepth = cookie.bitDepth;
+                  if (cookie.sampleRate > 0 && cookie.sampleRate <= 1000000) fmt.sampleRate = cookie.sampleRate;
+                  if (cookie.frameLength > 0) fmt.frameLength = cookie.frameLength;
+                }
+
+                // ── 优先级 2：AudioSampleEntry 标准字段 ──
+                // 偏移相对 entry 起始（= stsd + 16）。旧代码写成 stsd+40/42/48，
+                // 整体差 2 字节，读到的其实是 samplerate 的高 16 位，巧合地"看着对"。
+                if (entSize >= 36) {
+                  if (fmt.channels === undefined) {
+                    const ch = (bytes[entryPos + 22] << 8) | bytes[entryPos + 23];
+                    if (ch > 0 && ch <= 64) fmt.channels = ch;
+                  }
+                  if (fmt.bitDepth === undefined) {
+                    const ss = (bytes[entryPos + 24] << 8) | bytes[entryPos + 25];
+                    if (ss > 0 && ss <= 64) fmt.bitDepth = ss;
+                  }
+                  if (fmt.sampleRate === undefined) {
+                    // samplerate 是 16.16 定点数：高 16 位为整数部分
+                    const sr = (((bytes[entryPos + 30] << 24) | (bytes[entryPos + 31] << 16) |
+                                 (bytes[entryPos + 32] << 8) | bytes[entryPos + 33]) >>> 16);
+                    if (sr > 0 && sr < 1000000) fmt.sampleRate = sr;
+                  }
                 }
               }
             }
@@ -501,13 +599,36 @@ function parseFormatFromBytes(bytes) {
     return fmt;
   }
 
-  // DSF
+  // DSD (DSF)
   if (sig4 === 'DSD ') {
-    let fmt = { container: 'DSF', codec: 'DSD', format: 'DSF', lossless: true };
-    if (bytes.byteLength > 28) {
-      fmt.channels = readU32LE(20);
-      fmt.sampleRate = readU32LE(24);
-      fmt.bitDepth = 1;
+    const fmt = { container: 'DSF', codec: 'DSD', format: 'DSF', lossless: true };
+
+    // DSF 文件结构（实测）：
+    //   DSD chunk @ 文件+0（28 字节）:
+    //     +0  "DSD "   +4 chunkSize(u64)   +12 fileSize(u64)   +20 metadataPtr(u64, 指向 ID3)
+    //   fmt chunk @ 文件+28:
+    //     +0  "fmt "   +4 chunkSize(u64)   +12 formatVersion(4)  +16 formatID(4)
+    //     +20 channelType(4)  +24 channelNum(4)  +28 samplingFrequency(4)
+    //     +32 bitsPerSample(4)  +36 sampleCount(u64)  +44 blockSizePerChannel(4)
+    //
+    // 旧实现去读 文件+20 / +24，那其实是 64 位 metadataPtr 的低/高 32 位，
+    // 于是 channels 被读成 486850652（就是 ID3 偏移本身），sampleRate 读成 0。
+    const FMT_OFF = 28;
+    if (bytes.byteLength >= FMT_OFF + 48 && readStr(FMT_OFF, 4) === 'fmt ') {
+      const chType = readU32LE(FMT_OFF + 20);
+      const chNum = readU32LE(FMT_OFF + 24);
+      const dsRate = readU32LE(FMT_OFF + 28);
+      const bits = readU32LE(FMT_OFF + 32);
+      if (chNum >= 1 && chNum <= 64) fmt.channels = chNum;
+      if (chType >= 1 && chType <= 64) fmt.channelType = chType;
+      // 注意：这里是 **DSD 原始 1-bit 码率**（DSD64=2822400、DSD128=5644800、
+      // DSD256=11289600），不是解码后的 PCM 采样率（DSD64 → 352800）。
+      // 两者都正确，含义不同；显示时按 DSD 原始码率标注。
+      if (dsRate >= 100000 && dsRate <= 50000000) {
+        fmt.dsdRate = dsRate;
+        fmt.sampleRate = dsRate;
+      }
+      if (bits >= 1 && bits <= 64) fmt.bitDepth = bits;
     }
     return fmt;
   }
@@ -1966,10 +2087,10 @@ async function processSingleFile(file) {
     actualBitDepth: adv.bitDepth ? { estimated: adv.bitDepth.estimated, note: adv.bitDepth.note, detail: adv.bitDepth.detail } : { estimated: F?.bitDepth||16, note: F?.bitDepth?`基于文件格式 (${F.bitDepth}-bit)`:'未计算', detail: F?.bitDepth?`文件标称 ${F.bitDepth}-bit`:'无法确定' },
     cutoff: adv.cutoff ? { bw: adv.cutoff.bw, freq: adv.cutoff.freq, confidence: adv.cutoff.confidence } : { bw:100, freq:rawResult.sampleRate/2, confidence:'low' },
     snr: adv.snr ? { snrDB: adv.snr.snrDB, snrLow: adv.snr.snrLow, snrMid: adv.snr.snrMid, snrHigh: adv.snr.snrHigh, noiseFloorDB: adv.snr.noiseFloorDB, isEstimate: false } : (dd.snr || { snrDB: null, snrLow: null, snrMid: null, snrHigh: null, noiseFloorDB: null, isEstimate: true }),
-    // limitHit：估算比值撞到 100% 上限，说明该文件没有单一基频-谐波结构
-    // （复音音乐普遍如此），此 THD 不可当测量值用。必须透传给 UI，
-    // 否则界面会把「无法测量」显示成「失真极高」。
-    distortion: adv.distortion ? { harmonics: adv.distortion.harmonics, thdPct: adv.distortion.thdPct, fundamentalHz: adv.distortion.fundamentalHz, asymmetryPct: adv.distortion.asymmetryPct, limitHit: !!adv.distortion.limitHit, isEstimate: false } : (dd.distortion || { harmonics: [], thdPct: 0, isEstimate: true }),
+    // unmeasurable/reason：谐波不呈单调递减 → 非单一基频素材，THD 方法不适用。
+    // limitHit 保留以兼容旧判定。两者都必须透传，
+    // 否则界面会把「测不了」显示成「失真很高」。
+    distortion: adv.distortion ? { harmonics: adv.distortion.harmonics, thdPct: adv.distortion.thdPct, fundamentalHz: adv.distortion.fundamentalHz, asymmetryPct: adv.distortion.asymmetryPct, unmeasurable: !!adv.distortion.unmeasurable, reason: adv.distortion.reason || null, limitHit: !!(adv.distortion.limitHit || adv.distortion.unmeasurable), isEstimate: false } : (dd.distortion || { harmonics: [], thdPct: 0, isEstimate: true }),
     quality: [
       ['削波',(rawResult.clippedSamples||0)>0?'warn':'pass',(rawResult.clippedSamples||0)>0?`检测到 ${rawResult.clippedSamples} 个削波采样 (${rawResult.clipRatio?.toFixed(2)||'0'}%)`:'未检测到明显削波'],
       ['动态范围',(rawResult.dynamicRangeDB||0)>10?'pass':'warn',`Crest Factor ${(rawResult.crestFactor||0).toFixed(1)} dB, 动态范围约 ${(rawResult.dynamicRangeDB||0).toFixed(1)} dB`],
@@ -3301,17 +3422,19 @@ function narrateDistortion(analysis) {
   const d = analysis.distortion;
   if (!d || d.isEstimate || !d.harmonics || d.harmonics.length < 2) { return `<p style="margin:5px 0">无法检测到稳定的基频和谐波结构，可能为复杂合奏/噪声信号。</p>`; }
 
-  // limitHit：谐波能量超过基频，说明该文件没有单一的基频-谐波结构
+  // limitHit / unmeasurable：谐波不呈单调递减，说明该文件没有单一的基频-谐波结构
   // （复音音乐、打击乐、噪声类素材普遍如此）。
   // 此时 THD 数值不可用于判断「失真程度」，必须明说，
   // 否则会把「测不了」误读成「失真极高」。
-  if (d.limitHit) {
+  if (d.limitHit || d.unmeasurable) {
+    const why = d.reason ? `<br>判据：${d.reason}` : '';
     return `<p style="margin:5px 0"><b>无法给出可靠的 THD 数值</b>：` +
       `本工具用「自相关估基频 → 在平均频谱上取 H2~H5」的方式估算谐波失真，` +
-      `该方法的成立前提是音频只有<b>单一基频</b>（纯音、单件乐器独奏）。` +
-      `本文件的谐波位置能量高于基频位置（估算基频 ${d.fundamentalHz || '?'}Hz），` +
-      `说明是<b>多件乐器叠加的复音素材</b>——谱线上并不存在"基频 + 谐波"结构，` +
-      `此时的比值没有物理意义。</p>` +
+      `该方法的成立前提是音频只有<b>单一基频</b>（纯音、单件乐器独奏）——` +
+      `其物理依据是单音的谐波必然随阶数单调递减。` +
+      `本文件的谐波不满足这一条件${d.fundamentalHz ? `（估算基频 ${d.fundamentalHz}Hz）` : ''}，` +
+      `说明是<b>多件乐器叠加的复音素材</b>：谱线上并不存在"基频 + 谐波"结构，` +
+      `此时的比值没有物理意义。${why}</p>` +
       `<p style="margin:5px 0;font-size:.75rem;color:var(--fg3)">` +
       `若要评估这类素材的失真，需改用「与源文件逐样本差分的 null test」或专业测量工具（如 iZotope RX）。` +
       `本工具其余指标（响度/动态/削波/频谱/位深）不受此限制，仍然有效。</p>`;

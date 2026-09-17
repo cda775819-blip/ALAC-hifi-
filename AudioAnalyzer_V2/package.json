@@ -8,7 +8,7 @@
     "start": "electron .",
     "build": "electron-builder",
     "postinstall": "electron-builder install-app-deps",
-    "test": "node test/spectrum.test.mjs && node test/worker.test.mjs && node test/cutoff.test.mjs && node test/audiomath-guard.test.mjs && node test/kweighting.test.mjs && node test/alac-decode.test.mjs",
+    "test": "node test/spectrum.test.mjs && node test/worker.test.mjs && node test/cutoff.test.mjs && node test/audiomath-guard.test.mjs && node test/kweighting.test.mjs && node test/parse-format.test.mjs && node test/distortion-method.test.mjs && node test/alac-decode.test.mjs",
     "test:alac-perf": "node test/alac-perf.mjs",
     "test:ui": "electron test/ui.js",
     "test:layout": "electron test/layout.js",

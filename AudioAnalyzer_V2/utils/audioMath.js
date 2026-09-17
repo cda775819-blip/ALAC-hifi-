@@ -539,6 +539,57 @@ export function computeDistortion(data, sampleRate, freqs, spectrum) {
       return null;
     }
 
+    // ══════════════════════════════════════════════════════════
+    //  方法论门槛：此估算**只对单一基频素材成立**
+    //
+    //  物理依据：单音（纯音、单件乐器独奏）的谐波随阶数单调递减 ——
+    //  这是任何真实振动系统的性质（能量向高阶谐波传递必然衰减）。
+    //  而多件乐器叠加的复音素材，各阶"谐波格"落在不同乐器的能量上，
+    //  排序是任意的，不存在"基频 + 谐波"结构。
+    //
+    //  实测：某流行乐文件 H1=-12.3dB 而 H2=-9.9dB（谐波比基频高 2.4dB），
+    //  比值算出 >100% —— 不是失真极大，而是方法不适用。
+    //
+    //  因此：只要谐波不呈单调递减趋势，就判定无法测量，
+    //  宁可明说"测不了"，也不给一个会被误读为"失真极高"的数字。
+    // ══════════════════════════════════════════════════════════
+    const h1 = harmonics[0];
+    let growth = 0;             // 相邻谐波中"上升"的最大幅度
+    let growthAt = -1;
+    for (let i = 1; i < harmonics.length; i++) {
+      const d = harmonics[i] - harmonics[i - 1];
+      if (d > growth) { growth = d; growthAt = i; }
+    }
+    const strongest = Math.max(...harmonics);
+    const h1IsStrongest = h1 >= strongest - 0.5;   // 允许 0.5dB 的测量噪声
+    // 仅"不上升"还不够：全等幅（H1..H5 电平相同）也不上升，
+    // 但那显然不是"谐波递减"的物理形态（会算出恰好 100%）。
+    // 因此还要求带内谐波确实低于基频。
+    const decayed = h1 - Math.max(...harmonics.slice(1)) > 6;
+    // 尾部可放宽：高阶谐波靠近噪底时排序无意义
+    const tailFloor = h1 - 60;
+    const growthIsMeaningful = growth > 0.5 && (growthAt < 2 || harmonics[growthAt] > tailFloor);
+
+    if (!h1IsStrongest || growthIsMeaningful || !decayed) {
+      const why = !h1IsStrongest
+        ? `谐波 H${(harmonics.indexOf(strongest) + 1)} 比基频高 ${(strongest - h1).toFixed(1)}dB`
+        : (growthIsMeaningful
+            ? `谐波在 H${growthAt + 1} 处回升 ${growth.toFixed(1)}dB`
+            : `谐波未低于基频（H1=${h1.toFixed(1)}dB，最强谐波=${Math.max(...harmonics.slice(1)).toFixed(1)}dB）`);
+      D.warn('Distortion', `谐波不呈单调递减（${why}），判定非单一基频素材，THD 不可测量`);
+      return {
+        thdPct: 0,
+        fundamentalHz: Math.round(fundamentalHz * 10) / 10,
+        harmonics: harmonics.map(v => Math.round(v * 10) / 10),
+        asymmetryPct: 0,
+        // unmeasurable：「方法不适用」而非「失真为 0」，UI 必须据此显示提示
+        unmeasurable: true,
+        reason: why,
+        limitHit: true,        // 兼容既有的 UI 判定
+        isEstimate: false,
+      };
+    }
+
     // THD = sqrt(sum(H2²...H5²)) / H1 × 100%
     //
     // 局限：这是「从平均频谱推谐波」的估算，不是真正的 THD 测量。
@@ -576,8 +627,9 @@ export function computeDistortion(data, sampleRate, freqs, spectrum) {
       fundamentalHz: Math.round(fundamentalHz * 10) / 10,
       harmonics,
       asymmetryPct: Math.round(asymmetryPct * 10) / 10,
-      // limitHit：估算比值超过 100%，说明该文件的谐波结构不是单一基频，
-      // 此 THD 只能当「有失真迹象」看，不能当测量值
+      // 走到这里说明通过了单调递减门槛，谐波结构可信
+      unmeasurable: false,
+      // 保留 limitHit 以兼容既有 UI 判定（此处恒为 false）
       limitHit: !!limitHit,
       isEstimate: false,
     };
