@@ -6,6 +6,24 @@ const os = require('os');
 
 let mainWindow = null;
 
+// 窗口/任务栏图标。
+// 打包后 exe 本身已内嵌图标（electron-builder 由 build/icon.ico 写入），
+// 但开发模式（npm start）跑的是 node_modules 里的 electron.exe，
+// 任务栏会显示 Electron 默认图标 —— 所以这里显式指定，两种模式保持一致。
+// build/ 不在 files 白名单里，打包后不存在，回退到 icon.ico/png 并用存在性判断兜底。
+function resolveAppIcon() {
+  const candidates = [
+    path.join(__dirname, 'build', 'icon.ico'),
+    path.join(__dirname, 'build', 'icon.png'),
+    path.join(__dirname, 'icon.ico'),
+    path.join(__dirname, 'icon.png'),
+  ];
+  for (const p of candidates) {
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return undefined;   // 不传 icon 时 Electron 用默认图标，不报错
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -14,6 +32,7 @@ function createWindow() {
     minHeight: 600,
     title: 'Audio Analyzer Pro',
     backgroundColor: '#0d1117',
+    icon: resolveAppIcon(),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -119,6 +138,9 @@ function resolveFfmpegPath() {
 }
 
 ipcMain.handle('app:getFfmpegPath', () => resolveFfmpegPath());
+// 应用版本单一来源：package.json。界面与导出报告都从这里取，
+// 避免在 HTML/JS 里手写版本号后在升级时漏改（历史上就漏过）。
+ipcMain.handle('app:getVersion', () => app.getVersion());
 
 // ── 解析 WAV 头，取出真实采样率/声道数 ──
 // 这样就不必把任何采样率写死，高采样率源可以原样保留
