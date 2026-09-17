@@ -79,18 +79,43 @@ ipcMain.handle('file:size', async (_event, filePath) => {
 });
 
 // ── FFmpeg 路径解析（打包内置优先，其次 PATH） ──
-function resolveFfmpegPath() {
-  const candidates = [
-    path.join(__dirname, 'assets', 'ffmpeg.exe'),
-    path.join(__dirname, 'assets', 'ffmpeg'),
-    path.join(process.resourcesPath || '', 'assets', 'ffmpeg.exe'),
-    path.join(process.resourcesPath || '', 'assets', 'ffmpeg'),
-    path.join(path.dirname(app.getPath('exe')), 'assets', 'ffmpeg.exe'),
-  ];
-  for (const p of candidates) {
+//
+// 关键：打包后必须优先取 app.asar.unpacked 里的副本。
+// app.asar 是归档文件而非目录，**外部进程无法执行 asar 内的文件**
+// （execFile/spawn 会失败），所以 package.json 里用 asarUnpack
+// 把 ffmpeg/ffprobe 解包到磁盘。若只查 __dirname（asar 内路径），
+// 打包版会静默退回系统 PATH，用户没装 FFmpeg 时兜底解码全部失效。
+function assetCandidates(binName) {
+  const base = binName.replace(/\.exe$/i, '');
+  const names = process.platform === 'win32' ? [`${base}.exe`, base] : [base, `${base}.exe`];
+  const roots = [];
+  // 1) asar 解包目录（打包后真正可执行的位置）
+  if (typeof process.resourcesPath === 'string' && process.resourcesPath) {
+    roots.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'assets'));
+    roots.push(path.join(process.resourcesPath, 'assets'));
+  }
+  // 2) 开发环境 / 未打包
+  roots.push(path.join(__dirname, 'assets'));
+  if (typeof __dirname === 'string' && __dirname.includes('app.asar')) {
+    roots.push(path.join(__dirname.replace('app.asar', 'app.asar.unpacked'), 'assets'));
+  }
+  // 3) 安装目录旁（兜底）
+  try { roots.push(path.join(path.dirname(app.getPath('exe')), 'assets')); } catch (_) {}
+
+  const out = [];
+  for (const r of roots) for (const n of names) out.push(path.join(r, n));
+  return out;
+}
+
+function resolveBinary(binName, fallback) {
+  for (const p of assetCandidates(binName)) {
     try { if (p && fs.existsSync(p)) return p; } catch (_) {}
   }
-  return 'ffmpeg'; // 回退到系统 PATH
+  return fallback;
+}
+
+function resolveFfmpegPath() {
+  return resolveBinary('ffmpeg', 'ffmpeg');   // 回退到系统 PATH
 }
 
 ipcMain.handle('app:getFfmpegPath', () => resolveFfmpegPath());
@@ -325,18 +350,16 @@ ipcMain.handle('lib:chooseRoot', async () => {
 
 // ── ffprobe 路径解析（与 ffmpeg 同目录，或 PATH） ──
 function resolveFfprobePath() {
+  // 先按与 ffmpeg 同目录找，再走统一的候选列表（含 asarUnpack 解包目录）
   const ff = resolveFfmpegPath();
-  const dir = path.dirname(ff);
-  const cands = [
-    path.join(dir, 'ffprobe.exe'),
-    path.join(dir, 'ffprobe'),
-    path.join(__dirname, 'assets', 'ffprobe.exe'),
-    path.join(process.resourcesPath || '', 'assets', 'ffprobe.exe'),
-  ];
-  for (const p of cands) {
-    try { if (p && fs.existsSync(p)) return p; } catch (_) {}
+  if (ff && ff !== 'ffmpeg') {
+    const dir = path.dirname(ff);
+    for (const n of (process.platform === 'win32' ? ['ffprobe.exe', 'ffprobe'] : ['ffprobe', 'ffprobe.exe'])) {
+      const p = path.join(dir, n);
+      try { if (fs.existsSync(p)) return p; } catch (_) {}
+    }
   }
-  return 'ffprobe';
+  return resolveBinary('ffprobe', 'ffprobe');
 }
 
 function runFfprobe(args, timeoutMs) {

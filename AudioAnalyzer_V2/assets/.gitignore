@@ -1,0 +1,9 @@
+# 打包时内置的 FFmpeg 二进制体积很大（静态完整版每个约 212MB），
+# 不入库；由打包脚本或手工放入本目录。
+# 下载：https://www.gyan.dev/ffmpeg/builds/ （选 full/static 版）
+ffmpeg.exe
+ffprobe.exe
+ffmpeg
+ffprobe
+*.zip
+*.7z
