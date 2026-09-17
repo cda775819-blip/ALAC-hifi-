@@ -71,14 +71,20 @@ ok(hitFf && hitFp, 'main.js 的路径解析在打包环境下无法命中内置�
 
 // ── 4) 安装包与解包目录 ──
 console.log('\n【4】产物体积');
-const setup = path.join(ROOT, 'dist', 'Audio Analyzer Pro Setup 9.0.0.exe');
-if (fs.existsSync(setup)) {
+// 不写死版本号：安装包名随 package.json version 变化
+let setup = null;
+try {
+  const distDir = path.join(ROOT, 'dist');
+  const cands = fs.readdirSync(distDir).filter(f => /^Audio Analyzer Pro Setup .*\.exe$/.test(f));
+  if (cands.length) setup = path.join(distDir, cands[0]);
+} catch (_) {}
+if (setup && fs.existsSync(setup)) {
   const mb = fs.statSync(setup).size / 1048576;
-  console.log('  安装包: ' + mb.toFixed(1) + ' MB');
+  console.log('  安装包: ' + path.basename(setup) + '  ' + mb.toFixed(1) + ' MB');
   ok(mb > 150, '安装包体积偏小（' + mb.toFixed(1) + ' MB），可能未包含 FFmpeg');
 } else {
   console.log('  ⚠ 未找到安装包（只打包了 win-unpacked？）');
-  fails.push('找不到安装包 dist/Audio Analyzer Pro Setup 9.0.0.exe');
+  fails.push('找不到 dist/ 下的安装包');
 }
 
 // ── 5) asar 内不应包含的东西 ──
