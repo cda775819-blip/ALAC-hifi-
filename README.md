@@ -12,7 +12,7 @@
 
 👉 **[下载 Audio Analyzer Pro v9.0.2 安装程序](https://github.com/cda775819-blip/ALAC-hifi-/releases/latest/download/Audio.Analyzer.Pro.Setup.9.0.2.exe)**
 
-文件名：`Audio Analyzer Pro Setup 9.0.2.exe`（约 219 MB）
+文件名：`Audio Analyzer Pro Setup 9.0.2.exe`（211.9 MB）
 
 - 双击安装，可自选安装目录，自动创建桌面快捷方式
 - **已内置 ffmpeg / ffprobe**，无需另行安装任何依赖
