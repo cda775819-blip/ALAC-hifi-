@@ -10,13 +10,14 @@
 
 ### 方式一：安装版（推荐）
 
-👉 **[下载 Audio Analyzer Pro v9.0.1 安装程序](https://github.com/cda775819-blip/ALAC-hifi-/releases/latest/download/Audio.Analyzer.Pro.Setup.9.0.1.exe)**
+👉 **[下载 Audio Analyzer Pro v9.0.2 安装程序](https://github.com/cda775819-blip/ALAC-hifi-/releases/latest/download/Audio.Analyzer.Pro.Setup.9.0.2.exe)**
 
-文件名：`Audio Analyzer Pro Setup 9.0.1.exe`（211.8 MB）
+文件名：`Audio Analyzer Pro Setup 9.0.2.exe`（约 219 MB）
 
 - 双击安装，可自选安装目录，自动创建桌面快捷方式
 - **已内置 ffmpeg / ffprobe**，无需另行安装任何依赖
 - 卸载通过「设置 → 应用」，或安装目录下的 `Uninstall`
+- 应用图标与界面同为炭黑 + 琥珀 + 青的仪器配色（见下方「图标」一节）
 
 > 全部版本与更新说明见 👉 **[Releases 页面](https://github.com/cda775819-blip/ALAC-hifi-/releases)**
 >
@@ -183,6 +184,15 @@ LUFS 端到端最大偏差 **0.215 dB**（40Hz 极低音素材）。
 
 ## 修复记录
 
+### v9.0.2
+
+| 问题 | 影响 |
+|------|------|
+| **WAV 头解析越界崩溃** | 解析器的整数读取只覆盖文件**前 256 字节**，且命中 `fmt ` 后不停止遍历。遇到「fmt 之后还夹着 `LIST`/`JUNK` 等填充块」的正常 WAV（例如 `fmt`@12 → `LIST`@36 → `JUNK`@314 → `data`@4088），会继续往后读 chunk 头并抛 `RangeError`，整条分析链中断，界面显示为「所有解码方式均失败」。现改为在完整缓冲区上读取并做边界判断、命中 `fmt ` 即停止、并对越界/零长度 chunk 与奇数块字对齐做保护 |
+| **THD 把乐器泛音当成失真** | 新增的「能量集中度」判据：最强谱线占总能量的比例。纯音实测 51~67%，真实音乐 7~21%，门槛取 30%。不满足时报「无法测量」并给出实测数字，而不是报出「失真很高」 |
+| **应用图标与界面风格不符** | 旧图标是深青底 + 蓝色柱，与界面的炭黑/琥珀/青配色无关，且四角不透明、柱子有锯齿、只有 256px。已重做为同色系频谱图标，含 16~256 共 9 个尺寸（详见「图标」一节） |
+| **版本号在界面与报告里是手写的** | 升级时容易漏改。现统一从 `package.json` 读取（新增 `app:getVersion`），侧栏、状态栏、导出报告三处自动跟随 |
+
 ### v9.0.1
 
 | 问题 | 影响 |
@@ -252,6 +262,7 @@ npm run stress:a         # 全库格式探测
 │   ├── worker/                    # FFT 分析 Worker
 │   ├── utils/audioMath.js         # LUFS / 位深度 / SNR / THD / 截止频率
 │   ├── renderer/                  # UI：app.js / library.js / styles.css
+│   ├── build/                     # 图标生成与校验脚本 + icon.ico / icon.png
 │   └── test/                      # 回归测试与验证脚本
 ├── AudioAnalyzer-V2-完整源码详解.md   # 源码级详解文档（4572 行）
 └── legacy/                        # 历史归档（只读，不再维护）
@@ -259,6 +270,36 @@ npm run stress:a         # 全库格式探测
     ├── audio_analyzer.py           # Python CLI 版
     └── V2-旧版单页残留.html          # 早期目录布局残留
 ```
+
+## 图标
+
+应用图标与界面同一套配色（炭黑底 + 琥珀 `#ffb020` + 青 `#2dd4bf`），
+画面是一排频谱柱 + 一根青色峰值柱。
+
+![应用图标](AudioAnalyzer_V2/build/icon.png)
+
+图标由脚本生成，**不是手绘的二进制文件** —— 想改配色或柱形，改脚本重跑即可：
+
+```bash
+cd AudioAnalyzer_V2
+node build/make-icon.mjs     # 生成 build/icon.png (1024) 与 build/icon.ico (16~256 共 9 个尺寸)
+node build/check-icon.mjs    # 自检：透明区 / 圆角 / 画布利用率 / 小尺寸可读性 / ICO 结构
+node build/make-preview.mjs  # 导出多尺寸核对图，肉眼确认
+```
+
+生成脚本（`build/` 目录）：
+
+| 文件 | 作用 |
+|------|------|
+| `make-icon.mjs` | 图标生成：圆角徽章 + 频谱柱，4~6 倍超采样抗锯齿 |
+| `png.mjs` | 无依赖的 PNG 编解码（只用 Node 自带 zlib） |
+| `check-icon.mjs` | 自检脚本，含小尺寸「柱子是否还分得开」的量化判定 |
+| `make-preview.mjs` | 把 256/64/32/16 四个尺寸放大拼成一张核对图 |
+| `analyze-icon.mjs` | 分析任意 PNG 的配色与构图（输出 ASCII 缩略图） |
+| `verify-exe-icon.mjs` | 解析打包后 exe 的 PE 资源，逐尺寸比对内嵌图标 |
+
+小尺寸是**单独渲染**的，不是把大图缩小：主图 9 根柱在 16px 下每根只有
+0.75px、缝隙 0.5px，会糊成一整条；因此 ≤42px 改用 4 根粗柱并做整像素对齐。
 
 ## 系统要求
 
