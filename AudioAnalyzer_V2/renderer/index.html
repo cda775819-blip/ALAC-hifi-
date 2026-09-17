@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Audio Analyzer Pro</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<div class="app" id="appRoot">
+
+  <!-- ══ 侧栏 ══ -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand">
+        <div class="brand-mark"><i></i><i></i><i></i></div>
+        <div class="brand-text">
+          <h1>Audio Analyzer</h1>
+          <div class="sub">Pro · QC Suite</div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav" id="sidebarNav">
+      <div class="nav-group">分析</div>
+      <div class="nav-item active" data-section="overview"><span class="ico">◈</span> <span>总览</span></div>
+      <div class="nav-item" data-section="quality"><span class="ico">✓</span> <span>质量评估</span></div>
+      <div class="nav-item" data-section="narrative"><span class="ico">◎</span> <span>分析报告</span></div>
+      <div class="nav-group">频谱</div>
+      <div class="nav-item" data-section="spectrum"><span class="ico">◫</span> <span>频率响应</span></div>
+      <div class="nav-item" data-section="spectrogram"><span class="ico">▦</span> <span>频谱图</span></div>
+      <div class="nav-item" data-section="soundspectrum"><span class="ico">▥</span> <span>声谱</span></div>
+      <div class="nav-group">时域与电平</div>
+      <div class="nav-item" data-section="waveform"><span class="ico">▤</span> <span>波形</span></div>
+      <div class="nav-item" data-section="dynamics"><span class="ico">▧</span> <span>动态 &amp; 电平</span></div>
+      <div class="nav-item" data-section="loudnesscurve"><span class="ico">◉</span> <span>响度曲线</span></div>
+      <div class="nav-group">指标</div>
+      <div class="nav-item" data-section="snr"><span class="ico">▣</span> <span>信噪比</span></div>
+      <div class="nav-item" data-section="distortion"><span class="ico">▨</span> <span>失真分析</span></div>
+      <div class="nav-item" data-section="stereo"><span class="ico">⧗</span> <span>立体声 &amp; 相位</span></div>
+      <div class="nav-item" data-section="info"><span class="ico">▤</span> <span>文件信息</span></div>
+      <div class="nav-group">系统</div>
+      <div class="nav-item" data-section="debug"><span class="ico">⚙</span> <span>调试日志</span></div>
+    </nav>
+
+    <div class="sidebar-footer">
+      <span class="ver">v9.0</span>
+      <span id="engineInfo">READY</span>
+    </div>
+  </aside>
+
+  <!-- ══ 顶栏 ══ -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn" id="btnLibrary" title="显示/隐藏 音乐库 (Ctrl+B)">☰</button>
+      <div class="file-chip">
+        <span class="dot" id="fileDot"></span>
+        <span class="name" id="topFileName">未加载文件</span>
+        <span class="meta" id="topFileMeta"></span>
+      </div>
+      <div class="btn-group">
+        <button class="btn" id="btnBrowse">打开文件</button>
+        <button class="btn ghost sm" id="btnExport" title="导出当前分析报告">导出</button>
+      </div>
+      <span class="worker-status idle" id="workerStatus">Worker 空闲</span>
+    </div>
+    <div class="topbar-right">
+      <span class="status-text" id="statusLeft">就绪</span>
+      <span class="status-text dim" id="statusRight"></span>
+    </div>
+  </header>
+
+  <!-- ══ 音乐库 ══ -->
+  <aside class="library" id="library">
+    <div class="lib-head">
+      <div class="lib-title">
+        <h2>音乐库</h2>
+        <span class="stat" id="libStat">未扫描</span>
+      </div>
+      <div class="lib-search">
+        <span class="mag">/</span>
+        <input type="text" id="libSearch" placeholder="搜索文件名 / 目录…" spellcheck="false" autocomplete="off">
+      </div>
+      <div class="lib-filters" id="libFilters"></div>
+    </div>
+    <div class="lib-body" id="libBody">
+      <div class="lib-empty" id="libEmpty">
+        尚未扫描音乐库<br>
+        <span style="font-size:10.5px">点击下方「扫描」按钮，或按 <kbd>Ctrl</kbd>+<kbd>O</kbd></span>
+      </div>
+      <div class="vlist" id="libList" style="display:none"></div>
+    </div>
+    <div class="lib-foot">
+      <div class="btn-group">
+        <button class="btn sm" id="btnScanLib">扫描</button>
+        <button class="btn sm ghost" id="btnAnalyzeAll" disabled>分析全部</button>
+      </div>
+      <span id="libFootStat">—</span>
+    </div>
+  </aside>
+
+  <!-- ══ 主区 ══ -->
+  <main class="main" id="mainArea">
+    <!-- 欢迎屏 -->
+    <div class="welcome" id="welcome">
+      <div class="welcome-inner">
+        <div class="welcome-mark"><i></i><i></i><i></i><i></i></div>
+        <h2>音频质量分析器</h2>
+        <p>拖入音频文件，或从左侧音乐库选择 —— 全离线，不上传任何数据</p>
+        <div class="welcome-actions">
+          <button class="btn primary" id="btnWelcomeOpen">选择文件</button>
+          <button class="btn" id="btnWelcomeLib">扫描音乐库</button>
+        </div>
+        <div class="welcome-hint">
+          双击库内文件即可分析，文件保持原位、绝不被移动或修改<br>
+          <kbd>Ctrl</kbd>+<kbd>B</kbd> 库面板 &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>O</kbd> 打开文件 &nbsp;·&nbsp; <kbd>↑</kbd><kbd>↓</kbd> 切换条目 &nbsp;·&nbsp; <kbd>Enter</kbd> 分析
+        </div>
+      </div>
+    </div>
+
+    <!-- 紧凑拖放条 -->
+    <div id="dropZone" class="drop-strip" style="display:none">
+      <span class="ico">＋</span>
+      <span>拖放音频文件到此处，或点击选择</span>
+    </div>
+
+    <input type="file" id="fileInput" accept="audio/*,.flac,.wav,.mp3,.m4a,.aac,.ogg,.wma,.aiff,.aif,.ape,.wv,.tta,.dsf,.dff,.caf,.ac3,.eac3,.mka,.webm,.alac,.opus" multiple hidden>
+
+    <div class="content" id="content">
+      <div class="results-wrap" id="results"></div>
+
+      <section class="section" id="section-narrative" style="display:none">
+        <div class="card accent">
+          <div class="card-header"><span class="head-l"><span class="bar"></span>智能分析报告</span></div>
+          <div class="card-body narrative" id="narrativeBody">
+            <p class="placeholder">分析完成后自动生成</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="section-debug" style="display:none">
+        <div class="card">
+          <div class="card-header">
+            <span class="head-l"><span class="bar cy"></span>调试日志</span>
+            <span style="display:flex;gap:6px;align-items:center">
+              <span class="dim" id="debugSummary" style="font-size:10px;font-family:var(--mono)"></span>
+              <span class="count err" id="debugErrCount" style="display:none">✕ 0</span>
+              <span class="count ok" id="debugOkCount" style="display:none">✓ 0</span>
+            </span>
+          </div>
+          <div class="card-body" style="padding:0">
+            <div class="debug-console open" id="debugConsole"><div class="debug-body" id="debugBody"><div class="debug-empty">等待文件加载…</div></div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="debug-console" id="debugDock"></div>
+  </main>
+
+  <!-- ══ 状态栏 ══ -->
+  <footer class="statusbar">
+    <span class="seg" id="statEngine">engine ready</span>
+    <span class="seg" id="statFile">no file</span>
+    <span class="spacer"></span>
+    <span class="seg kv" id="statMem"></span>
+    <span class="seg" id="statVersion">v9.0</span>
+  </footer>
+</div>
+
+<!-- 加载遮罩 -->
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loadingText">正在解码音频…</div>
+  <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+  <div class="loading-sub" id="loadingSub"></div>
+</div>
+
+<script type="module" src="./app.js"></script>
+<script type="module" src="./library.js"></script>
+</body>
+</html>

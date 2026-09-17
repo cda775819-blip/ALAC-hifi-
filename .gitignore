@@ -9,3 +9,27 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# Node / 构建产物（源码必须提交，这两项必须排除）
+node_modules/
+AudioAnalyzer_V2/dist/
+AudioAnalyzer_V2/build/*.ico
+
+# 临时验证脚本
+.tmp-*
+*.tmp
+
+# 测试运行产物
+AudioAnalyzer_V2/.shot/
+AudioAnalyzer_V2/*.log
+test-samples/
+
+# 音频样本（不要提交测试用音频）
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.ape
+*.wv
+*.dsf
+*.dff

@@ -1,0 +1,53 @@
+{
+  "name": "audio-analyzer-v2",
+  "version": "9.0.0",
+  "description": "Audio Analyzer Pro V2 — 专业音频质量分析桌面工具",
+  "author": "AudioAnalyzer",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "postinstall": "electron-builder install-app-deps",
+    "test": "node test/spectrum.test.mjs && node test/worker.test.mjs && node test/cutoff.test.mjs && node test/audiomath-guard.test.mjs && node test/kweighting.test.mjs && node test/alac-decode.test.mjs",
+    "test:alac-perf": "node test/alac-perf.mjs",
+    "test:ui": "electron test/ui.js",
+    "test:layout": "electron test/layout.js",
+    "stress:a": "node test/stress-a-probe.cjs",
+    "stress:b": "electron test/stress-b-analyze.js",
+    "stress:prof": "electron test/stress-prof.js",
+    "stress:mem": "electron test/mem-profile.js",
+    "verify:paths": "electron test/consistency-paths.mjs",
+    "verify:thd-ui": "electron test/ui-distortion.mjs",
+    "verify:smallpath": "electron test/diag-smallpath.js",
+    "smoke": "electron test/e2e.js"
+  },
+  "build": {
+    "appId": "audio.analyzer.v2",
+    "productName": "Audio Analyzer Pro",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "worker/**/*",
+      "core/**/*",
+      "utils/**/*",
+      "assets/**/*"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  }
+}
