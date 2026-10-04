@@ -142,8 +142,38 @@ window.toggleDebug = toggleDebug;
 //  异步分片执行器（防 UI 冻结）
 // ═══════════════════════════════════════════════════════════════
 
+// 让出主线程一次，使 UI 有机会重绘。
+//
+// ⚠ 不要用 setTimeout(0)：Chromium 对「嵌套层数 > 5 的 timeout」施加
+// 最小 4ms 的钳制（HTML 规范允许的实现行为，防 CPU 自旋）。
+// 我们的循环每轮都调用它，于是每次"让出"实际要等约 4ms —— 让出本身
+// 反而成了最大开销。实测（D:\2\Downloads 的 FLAC，走完整分析链）：
+//   3.0MB / 17.7s 音频 → spectrogram 步骤 245ms（循环次数少，感知不到）
+//  40.1MB / 358.8s 音频 → 同一步骤 88.5 秒（总耗时 93.5 秒的 95%）
+// 265.9MB / 131.1s 音频 → waveform 步骤 87.9 秒
+// 也就是「越长的文件越慢」，而且慢的不是解码/分析，纯粹是让出开销。
+//
+// MessageChannel 的 port.postMessage 走任务队列，不受 timeout 钳制，
+// 单次开销在微秒级，UI 依然能在两次宏任务之间重绘。
+//
+// 状态挂在函数自身（惰性初始化）而不是模块级变量：
+// test/extract.mjs 是按函数名抽取源码的，模块级变量不会被带过去，
+// 抽出来执行会直接 ReferenceError。自包含才能被测。
 function yieldToUI() {
-  return new Promise(r => setTimeout(r, 0));
+  if (typeof MessageChannel !== 'undefined') {
+    let ch = yieldToUI._ch;
+    if (!ch) {
+      ch = yieldToUI._ch = new MessageChannel();
+      ch.port1.onmessage = () => {
+        const list = ch._q;
+        ch._q = [];
+        for (const r of list) r();
+      };
+      ch._q = [];
+    }
+    return new Promise(r => { ch._q.push(r); ch.port2.postMessage(null); });
+  }
+  return new Promise(r => setTimeout(r, 0));   // 无 MessageChannel 时兜底
 }
 
 function withTimeout(promise, ms) {

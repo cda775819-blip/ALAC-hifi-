@@ -181,9 +181,22 @@ console.log(`  比对帧数    : ${totalFrames}`);
 console.log(`  不一致帧数  : ${mismatchFrames}`);
 console.log(`  比对样本数  : ${totalSamples}`);
 console.log(`  不一致样本  : ${mismatchSamples}`);
-console.log('\n' + (mismatchFrames === 0 && totalFrames > 0
-  ? '✅ 新位读取器与旧实现解码结果逐样本一致 —— 替换安全'
-  : (totalFrames === 0 ? '⚠ 未取得可比对的真实帧' : '❌ 存在差异，替换不安全')));
+
+// 退出码语义：
+//   0 = 通过，或不适用（样本不在，例如音乐库所在的移动硬盘未连接）
+//   1 = 真的比对出差异
+// 把「取不到样本」当失败会导致：外接盘一拔，整个 npm test 变红，
+// 而实际上代码没有任何问题 —— 这种假警报会掩盖真正的回归。
+const skipped = totalFrames === 0;
+if (skipped) {
+  console.log('\n⚠ 跳过：未能取得可比对的真实 ALAC 帧');
+  console.log('  该测试依赖音乐库样本（' + candidates.length + ' 个候选路径均不可用）。');
+  console.log('  若音乐库在移动硬盘上，请插回硬盘后重跑；其余测试不受影响。');
+} else {
+  console.log('\n' + (mismatchFrames === 0
+    ? '✅ 新位读取器与旧实现解码结果逐样本一致 —— 替换安全'
+    : '❌ 存在差异，替换不安全'));
+}
 
 for (const p of [oldModPath, newModPath, mp4Path]) { try { fs.unlinkSync(p); } catch (_) {} }
-process.exit(mismatchFrames === 0 && totalFrames > 0 ? 0 : 1);
+process.exit(skipped || mismatchFrames === 0 ? 0 : 1);
