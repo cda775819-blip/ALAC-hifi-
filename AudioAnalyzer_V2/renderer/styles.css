@@ -325,6 +325,73 @@ button:focus:not(:focus-visible){outline:none}
   font-size:10px;color:var(--fg3);font-family:var(--mono);flex-wrap:wrap;
 }
 
+/* ═══════════════ 音乐库来源管理面板 ═══════════════ */
+/* 支持多块盘/多个文件夹；离线来源标灰但保留，不因为一个盘拔了就让库空白 */
+.lib-src-panel{
+  position:fixed;left:280px;bottom:64px;width:min(560px,calc(100vw - 320px));
+  max-height:min(60vh,520px);display:none;flex-direction:column;
+  background:var(--bg1);border:1px solid var(--line-2);border-radius:var(--r-lg);
+  box-shadow:0 18px 48px rgba(0,0,0,.55);z-index:60;overflow:hidden;
+}
+.lib-src-panel.open{display:flex}
+.lib-src-head{
+  display:flex;align-items:center;gap:8px;padding:10px 12px;
+  border-bottom:1px solid var(--line);background:var(--bg2);
+}
+.lib-src-head b{font-size:12px;color:var(--fg0)}
+.lib-src-sub{font-size:10px;color:var(--fg3);flex:1}
+.lib-src-close{
+  background:transparent;border:1px solid var(--line);color:var(--fg3);
+  border-radius:var(--r);cursor:pointer;padding:1px 7px;font-size:11px;
+}
+.lib-src-close:hover{color:var(--fg0);border-color:var(--line-2)}
+.lib-src-list{overflow:auto;padding:6px 0;flex:1;min-height:52px}
+.lib-src-empty{padding:14px 12px;font-size:11px;color:var(--fg3);line-height:1.7}
+.lib-src-row{
+  display:grid;grid-template-columns:auto 1fr auto auto auto;gap:8px;align-items:center;
+  padding:6px 12px;font-size:11px;font-family:var(--mono);
+  border-bottom:1px solid var(--line-soft);
+}
+.lib-src-row:hover{background:var(--bg2)}
+.ls-kind{
+  font-size:9.5px;padding:1px 5px;border-radius:3px;
+  border:1px solid var(--line-2);color:var(--fg2);white-space:nowrap;
+}
+.ls-path{color:var(--fg1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ls-serial{font-size:9.5px;color:var(--fg3);white-space:nowrap}
+.ls-ok{color:var(--ok);font-size:10px;white-space:nowrap}
+.ls-off{color:var(--warn);font-size:10px;white-space:nowrap}
+.ls-wait{color:var(--fg3);font-size:10px;white-space:nowrap}
+.ls-note{
+  grid-column:2 / -1;font-size:9.5px;color:var(--fg3);
+  font-family:var(--sans,inherit);line-height:1.5;
+}
+.ls-del{
+  background:transparent;border:1px solid transparent;color:var(--fg3);
+  cursor:pointer;border-radius:3px;padding:0 5px;font-size:11px;
+}
+.ls-del:hover{color:var(--bad);border-color:var(--line-2)}
+.lib-src-add{
+  display:flex;gap:6px;padding:8px 12px;border-top:1px solid var(--line);
+  background:var(--bg2);flex-wrap:wrap;
+}
+.btn-mini{
+  background:var(--bg3);border:1px solid var(--line);color:var(--fg1);
+  border-radius:var(--r);padding:3px 9px;font-size:10.5px;cursor:pointer;
+}
+.btn-mini:hover{color:var(--fg0);border-color:var(--line-2)}
+.lib-src-vols{
+  display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;
+  border-top:1px solid var(--line-soft);max-height:120px;overflow:auto;
+}
+.ls-vol{
+  background:var(--bg2);border:1px solid var(--line);color:var(--fg1);
+  border-radius:var(--r);padding:3px 9px;font-size:10.5px;cursor:pointer;
+  font-family:var(--mono);
+}
+.ls-vol:hover:not(:disabled){border-color:var(--am);color:var(--fg0)}
+.ls-vol.on,.ls-vol:disabled{opacity:.45;cursor:default}
+
 /* ═══════════════ 主内容 ═══════════════ */
 .main{
   grid-area:main;

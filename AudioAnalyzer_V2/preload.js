@@ -20,4 +20,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 音乐库（只读：仅 readdir + stat）
   scanLibrary: (dirPath, opts) => ipcRenderer.invoke('lib:scan', dirPath, opts),
   chooseLibraryRoot: () => ipcRenderer.invoke('lib:chooseRoot'),
+  // 音乐库来源管理：可配置多个位置（含整块盘），并记住卷序列号 ——
+  // 移动硬盘换盘符后仍能按卷认回同一个库，而不是直接失效
+  getLibrarySources: () => ipcRenderer.invoke('lib:getSources'),
+  setLibrarySources: (sources) => ipcRenderer.invoke('lib:setSources', sources),
+  listVolumes: () => ipcRenderer.invoke('lib:volumes'),
+  resolveLibrarySource: (src) => ipcRenderer.invoke('lib:resolveSource', src),
 });

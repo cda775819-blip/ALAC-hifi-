@@ -297,6 +297,16 @@ const AUDIO_EXT = new Set([
 // 否则那些 GB 级的 decoded_*.wav 会被当成音频文件列进音乐库
 const TMP_DIR = path.join(os.tmpdir(), 'audio-analyzer-ffmpeg');
 
+// 全盘扫描时要跳过的系统/无关目录（相对盘根的一级目录名，小写比对）。
+// 不跳的话 C:\ 会遍历到 WinSxS 这类几十万文件、还会因权限反复抛错，
+// 扫描时间从秒级变成分钟级。
+const SKIP_DIRS = new Set([
+  'windows', 'program files', 'program files (x86)', 'programdata',
+  '$recycle.bin', 'system volume information', 'recovery',
+  'perflogs', 'msocache', '$windows.~bt', '$windows.~ws',
+  'node_modules', '.git', 'appdata', 'intel', 'amd', 'nvidia',
+]);
+
 function walkAudio(dir, opts, out, depth) {
   if (depth > opts.maxDepth) return out;
   // 不进入解码临时目录
@@ -308,6 +318,8 @@ function walkAudio(dir, opts, out, depth) {
     if (e.name.startsWith('.')) continue;
     const full = path.join(dir, e.name);
     if (e.isDirectory()) {
+      // 只在盘根/库根的第一层做系统目录过滤（深层同名目录可能是用户的音乐夹）
+      if (depth <= 1 && SKIP_DIRS.has(e.name.toLowerCase())) continue;
       out.dirs++;
       walkAudio(full, opts, out, depth + 1);
     } else if (e.isFile()) {
@@ -331,6 +343,196 @@ function walkAudio(dir, opts, out, depth) {
   return out;
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  卷识别：用于「移动硬盘换盘符后仍能找回同一个库」
+//
+//  fs.statSync('X:\\').dev 在 Windows 上正好等于卷序列号
+//  （实测 C:=0xA21ACB56 D:=0xE6BA4C83 E:=0x988D31A3，与 Windows
+//   报告的 VolumeSerialNumber 完全一致）。
+//  它由卷本身决定、与盘符无关，所以盘符变了也能认出是同一个卷。
+//
+//  注意 st.ino 不能用：本机 Node 上三个盘的高 32 位都是 0x00050000，
+//  区分不出来（那是 NTFS 的文件索引高位，不是卷标识）。
+// ═══════════════════════════════════════════════════════════════
+
+/** 取某个路径所在卷的标识信息；盘不存在/无权限时返回 null */
+function getVolumeInfo(p) {
+  try {
+    const st = fs.statSync(p);
+    const dev = st.dev >>> 0;
+    return {
+      dev,
+      serial: '0x' + dev.toString(16).toUpperCase().padStart(8, '0'),
+      root: path.parse(path.resolve(p)).root,   // 例如 "F:\"
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * 枚举当前所有已挂载的卷。
+ * 顺带取卷标与容量 —— 只显示 "D:\" 用户认不出是哪块盘，
+ * 显示成「Data (D:) 188/275 GB」才选得对。
+ * 这个调用只在打开「来源管理」面板时发生，不在扫描热路径上，
+ * 所以多一次 PowerShell 查询是可接受的代价。
+ */
+async function listVolumes() {
+  const vols = [];
+  if (process.platform !== 'win32') {
+    const v = getVolumeInfo('/');
+    if (v) vols.push({ ...v, letter: '/', label: null, totalBytes: 0, freeBytes: 0 });
+    return vols;
+  }
+  for (let i = 67; i <= 90; i++) {              // C..Z
+    const letter = String.fromCharCode(i) + ':';
+    try { if (!fs.statSync(letter + '\\').isDirectory()) continue; } catch (_) { continue; }
+    const v = getVolumeInfo(letter + '\\');
+    if (v) vols.push({ ...v, letter, label: null, totalBytes: 0, freeBytes: 0 });
+  }
+  // 补卷标与容量（失败就算了，不影响识别）
+  try {
+    const ps = 'Get-CimInstance Win32_LogicalDisk | ' +
+      'ForEach-Object { "$($_.DeviceID)|$($_.VolumeName)|$($_.Size)|$($_.FreeSpace)" }';
+    const out = await new Promise(res => {
+      execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps],
+        { maxBuffer: 1 << 20, windowsHide: true, timeout: 8000 },
+        (err, stdout) => res(err ? '' : (stdout || '')));
+    });
+    const byLetter = new Map();
+    for (const line of out.split(/\r?\n/)) {
+      const parts = line.trim().split('|');
+      if (parts.length < 4 || !/^[A-Z]:$/.test(parts[0])) continue;
+      byLetter.set(parts[0], {
+        label: parts[1] || null,
+        totalBytes: Number(parts[2]) || 0,
+        freeBytes: Number(parts[3]) || 0,
+      });
+    }
+    for (const v of vols) {
+      const m = byLetter.get(v.letter);
+      if (m) { v.label = m.label; v.totalBytes = m.totalBytes; v.freeBytes = m.freeBytes; }
+    }
+  } catch (_) {}
+  return vols;
+}
+
+// ── 音乐库配置持久化（记在 userData，不进安装目录） ──
+const LIB_CONFIG_FILE = () => path.join(app.getPath('userData'), 'library-sources.json');
+
+const DEFAULT_LIB_SOURCES = [{ kind: 'dir', path: 'F:\\本地音乐文件', addedAt: 0 }];
+
+function readLibConfig() {
+  try {
+    const raw = fs.readFileSync(LIB_CONFIG_FILE(), 'utf8');
+    const j = JSON.parse(raw);
+    if (j && Array.isArray(j.sources)) return j;
+  } catch (_) { /* 首次运行或文件损坏 → 空配置 */ }
+  return { version: 1, sources: [] };
+}
+
+function writeLibConfig(cfg) {
+  try {
+    const f = LIB_CONFIG_FILE();
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify(cfg, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * 把一条来源补全为带卷信息的形态。
+ * 这样「盘符变了」才有依据按卷序列号重新定位。
+ */
+function enrichSource(src) {
+  const out = { ...src };
+  try {
+    const abs = path.resolve(out.path);
+    const root = path.parse(abs).root;                       // "F:\"
+    const vol = getVolumeInfo(root);                         // 盘根一定可读（否则盘不在）
+    if (vol) { out.volDev = vol.dev; out.volSerial = vol.serial; }
+    // kind=volume 表示「整块盘」，relPath 记录盘内的相对目录（整盘时为空）
+    const rel = path.relative(root, abs);
+    out.relPath = rel && rel !== '.' ? rel : '';
+    out.kind = out.kind === 'volume' ? 'volume' : (out.relPath ? 'dir' : 'volume');
+  } catch (_) {}
+  return out;
+}
+
+// IPC: 读取配置；首次使用且默认库存在时自动写入一条，避免老用户升级后库变空
+ipcMain.handle('lib:getSources', async () => {
+  let cfg = readLibConfig();
+  let changed = false;
+  // 老版本配置（只有 path、没有卷信息）→ 补全，否则盘符一变就找不回来
+  cfg.sources = (cfg.sources || []).map(s => {
+    if (s.volDev == null) { changed = true; return enrichSource(s); }
+    return s;
+  });
+  if (!cfg.sources.length && fs.existsSync(DEFAULT_LIB_SOURCES[0].path)) {
+    cfg = { version: 1, sources: DEFAULT_LIB_SOURCES.map(s => enrichSource({ ...s, addedAt: Date.now() })) };
+    changed = true;
+  }
+  if (changed) writeLibConfig({ version: 1, sources: cfg.sources });
+  return { version: 1, sources: cfg.sources };
+});
+
+// IPC: 保存整个来源列表
+ipcMain.handle('lib:setSources', async (_e, sources) => {
+  if (!Array.isArray(sources)) return { ok: false, error: 'sources 必须是数组' };
+  const clean = sources
+    .filter(s => s && typeof s.path === 'string' && s.path.trim())
+    .slice(0, 64)
+    // 一律在这里补卷信息：渲染层漏传 volDev 的话，
+    // 这条来源就失去了「盘符变了还能找回」的能力，属于静默降级。
+    .map(s => enrichSource({
+      kind: s.kind === 'volume' ? 'volume' : 'dir',
+      path: s.path.trim(),
+      volDev: Number.isFinite(s.volDev) ? (s.volDev >>> 0) : null,
+      volSerial: typeof s.volSerial === 'string' ? s.volSerial : null,
+      relPath: typeof s.relPath === 'string' ? s.relPath : '',
+      label: typeof s.label === 'string' ? s.label.slice(0, 120) : null,
+      addedAt: Number(s.addedAt) || Date.now(),
+    }));
+  const ok = writeLibConfig({ version: 1, sources: clean });
+  return { ok, file: LIB_CONFIG_FILE(), sources: clean };
+});
+
+// IPC: 枚举当前挂载的卷
+ipcMain.handle('lib:volumes', async () => ({ ok: true, volumes: await listVolumes() }));
+
+// IPC: 该路径所在卷是否可用（用于把历史来源映射回当前盘符）
+ipcMain.handle('lib:resolveSource', async (_e, src) => {
+  if (!src || typeof src.path !== 'string') return { ok: false, error: '无效来源' };
+  const direct = getVolumeInfo(src.path);
+  // 1) 原路径直接可用
+  if (direct && fs.existsSync(src.path)) {
+    return { ok: true, path: src.path, volDev: direct.dev, volSerial: direct.serial, remapped: false };
+  }
+  // 2) 盘符变了：按卷序列号在当前挂载的卷里找
+  if (Number.isFinite(src.volDev)) {
+    const hit = (await listVolumes()).find(v => v.dev === (src.volDev >>> 0));
+    if (hit) {
+      const candidate = src.relPath ? path.join(hit.root, src.relPath) : hit.root;
+      if (fs.existsSync(candidate)) {
+        return { ok: true, path: candidate, volDev: hit.dev, volSerial: hit.serial, remapped: true, from: src.path };
+      }
+      // 卷在但目录不在（可能是「整个盘」来源，直接用盘根）
+      if (src.kind === 'volume' && fs.existsSync(hit.root)) {
+        return { ok: true, path: hit.root, volDev: hit.dev, volSerial: hit.serial, remapped: true, from: src.path };
+      }
+    }
+  }
+  return {
+    ok: false,
+    offline: true,
+    path: src.path,
+    volSerial: src.volSerial || (direct ? direct.serial : null),
+    error: direct ? '路径不存在' : '所在卷未挂载',
+  };
+});
+
 // IPC: 扫描一个目录，返回音频文件清单（只读元数据）
 ipcMain.handle('lib:scan', async (_event, dirPath, options) => {
   try {
@@ -346,6 +548,7 @@ ipcMain.handle('lib:scan', async (_event, dirPath, options) => {
     const t0 = Date.now();
     const out = walkAudio(dirPath, opts, { files: [], bytes: 0, dirs: 0 }, 0);
     const ms = Date.now() - t0;
+    const vol = getVolumeInfo(dirPath);
 
     return {
       ok: true,
@@ -355,16 +558,32 @@ ipcMain.handle('lib:scan', async (_event, dirPath, options) => {
       dirCount: out.dirs,
       truncated: out.files.length >= opts.limit,
       elapsedMs: ms,
+      volDev: vol ? vol.dev : null,
+      volSerial: vol ? vol.serial : null,
+      maxDepth: opts.maxDepth,
     };
   } catch (e) {
-    return { ok: false, error: e.message };
+    // 区分「路径不存在 / 卷未挂载」与其它错误：前者是移动硬盘拔了，
+    // 不是故障，报原文 ENOENT 会让人以为程序坏了。
+    const missing = e && (e.code === 'ENOENT' || e.code === 'ENOTFOUND');
+    const vol = (() => { try { return getVolumeInfo(path.parse(path.resolve(dirPath)).root); } catch (_) { return null; } })();
+    return {
+      ok: false,
+      offline: missing,
+      root: dirPath,
+      volDev: vol ? vol.dev : null,
+      volSerial: vol ? vol.serial : null,
+      error: missing
+        ? `路径不存在：${dirPath}（若在移动硬盘上，请插回硬盘）`
+        : (e && e.message) || '扫描失败',
+    };
   }
 });
 
 // IPC: 让用户挑一个库根目录
 ipcMain.handle('lib:chooseRoot', async () => {
   const r = await dialog.showOpenDialog(mainWindow, {
-    title: '选择音乐库根目录',
+    title: '选择音乐库位置（可整块盘，也可只选某个文件夹）',
     properties: ['openDirectory'],
   });
   return r.canceled || !r.filePaths.length ? null : r.filePaths[0];
